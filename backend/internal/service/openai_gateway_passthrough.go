@@ -2475,9 +2475,13 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 				line = "data: " + string(sanitizedData)
 			}
 			metricPayload, metricType := metricEvent.observeLine("data: " + trimmedData)
+			startsSemanticOutput := openAIStreamDataStartsSemanticTTFT(string(metricPayload), metricType)
 			lineStartsClientOutput = forceFlushFailedEvent || openAIStreamDataStartsClientOutput(trimmedData, eventType)
 			if earlyPluginEvents && !forceFlushFailedEvent {
 				lineStartsClientOutput = len(metricPayload) > 0 && openAIStreamDataStartsClientOutput(string(metricPayload), metricType)
+			}
+			if account.IsOpenAIEarlySemanticSSEEnabled() && startsSemanticOutput {
+				lineStartsClientOutput = true
 			}
 			if lineStartsClientOutput {
 				documentScanner.firstOutputDeadline = time.Time{}
@@ -2504,7 +2508,6 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 			}
 			deliveryObservation.data(metricPayload, metricType)
 			pluginMetadataEvent.data(metricPayload, metricType)
-			startsSemanticOutput := openAIStreamDataStartsSemanticTTFT(string(metricPayload), metricType)
 			startsTTFTOutput := startsSemanticOutput
 			if ttftMode == OpenAITTFTModeVisible {
 				startsTTFTOutput = openAIStreamDataStartsVisibleOutput(trimmedData, eventType)
