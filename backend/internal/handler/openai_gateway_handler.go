@@ -4275,6 +4275,10 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 		return
 	}
 	copyFailoverRetryAfter(c, failoverErr.ResponseHeaders)
+	if failoverErr.Reason == service.OpenAIUpstreamAdmissionPausedReason {
+		h.handleStreamingAwareErrorWithCode(c, http.StatusTooManyRequests, "rate_limit_error", "upstream_admission_paused", service.OpenAIUpstreamAdmissionPausedMessage, streamStarted, false)
+		return
+	}
 	// Local BPS image admission rejection: nothing reached the upstream, so
 	// keep the fixed code and message of the image relay limit.
 	if failoverErr.IsExcelBPSImageAdmissionRejection() {
