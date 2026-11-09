@@ -6,12 +6,31 @@
 import { apiClient } from '../client'
 import type { PaginatedResponse } from '@/types'
 
+export interface PelicanQuestionGeneratorConfig {
+  api_key_id: number
+  model_id: string
+  prompt: string
+}
+
+export interface PelicanQuestionGeneratorKey {
+  id: number
+  name: string
+  user_id: number
+  status: string
+  available: boolean
+}
+
 export interface PelicanGroupTestConfig {
   question_kind?: string
   prompt: string
   reasoning_effort: string
   parallel_count: number
   model_id?: string
+  question_generator?: PelicanQuestionGeneratorConfig | null
+  fallback_prompts?: string[]
+  question_source?: 'ai' | 'fallback' | 'pool'
+  question_generation_error?: string
+  question_generation_ms?: number
 }
 
 /** An account a sample left because it failed before producing any output. */
@@ -76,6 +95,8 @@ export interface PelicanGroupTestPlanInput {
   prompt: string
   reasoning_effort: string
   parallel_count: number
+  question_generator?: PelicanQuestionGeneratorConfig | null
+  fallback_prompts?: string[]
 }
 
 export interface PelicanShowcaseSettings {
@@ -88,6 +109,14 @@ export interface PelicanShowcaseSettings {
 
 export async function listPlans(): Promise<PelicanGroupTestPlan[]> {
   const { data } = await apiClient.get<PelicanGroupTestPlan[]>('/admin/pelican-group-tests')
+  return data ?? []
+}
+
+/** Bounded name search for site keys. The selected ID is included on edits. */
+export async function listGeneratorKeys(query = '', selectedId = 0): Promise<PelicanQuestionGeneratorKey[]> {
+  const { data } = await apiClient.get<PelicanQuestionGeneratorKey[]>('/admin/pelican-group-tests/generator-keys', {
+    params: { q: query || undefined, selected_id: selectedId || undefined },
+  })
   return data ?? []
 }
 
@@ -136,6 +165,7 @@ export async function updateShowcaseSettings(settings: PelicanShowcaseSettings):
 
 export const pelicanTestsAPI = {
   listPlans,
+  listGeneratorKeys,
   createPlan,
   updatePlan,
   deletePlan,

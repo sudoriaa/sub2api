@@ -101,9 +101,9 @@ export default {
           enabledHint: 'When off, the sidebar entry is hidden and the endpoint returns an empty list.',
         },
         pelicanShowcase: {
-          title: 'Pelican Showcase',
-          movedHint: 'The showcase switch, retention rules and the scheduled group tests now live under Smart Ops → Pelican Showcase.',
-          movedLink: 'Open Pelican Showcase',
+          title: 'Degradation Detection',
+          movedHint: 'The showcase switch, retention rules and the scheduled group tests now live under Smart Ops → Degradation Detection.',
+          movedLink: 'Open Degradation Detection',
         },
         siteBillingMode: {
           title: 'Site Billing Mode',

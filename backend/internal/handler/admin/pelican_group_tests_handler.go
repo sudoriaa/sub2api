@@ -27,6 +27,25 @@ func (h *PelicanGroupTestHandler) ListPlans(c *gin.Context) {
 	response.Success(c, plans)
 }
 
+// ListGeneratorKeys returns names/IDs only, never API key credentials.
+func (h *PelicanGroupTestHandler) ListGeneratorKeys(c *gin.Context) {
+	var selectedID int64
+	if raw := c.Query("selected_id"); raw != "" {
+		var err error
+		selectedID, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || selectedID < 0 {
+			response.BadRequest(c, "invalid selected_id")
+			return
+		}
+	}
+	keys, err := h.svc.ListQuestionGeneratorKeys(c.Request.Context(), c.Query("q"), selectedID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, keys)
+}
+
 // CreatePlan POST /api/v1/admin/pelican-group-tests
 func (h *PelicanGroupTestHandler) CreatePlan(c *gin.Context) {
 	var input service.PelicanGroupTestPlanInput

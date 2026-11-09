@@ -656,9 +656,9 @@ export default {
 
   // Pelican showcase (user-facing gallery)
   pelicanShowcase: {
-    title: 'Pelican Showcase',
-    description: 'Each group answers the same drawing prompt on a schedule. Compare model quality by looking at the results.',
-    notice: "The Pelican test limits the model's maximum tokens, so some pelicans shown here may have no legs or wheels that don't turn. This is normal. If the style is right, the model is not degraded.",
+    title: 'Degradation Detection',
+    description: 'Each group answers AI-generated or pooled drawing questions on a schedule. View the artwork as a reference for model performance.',
+    notice: 'Output tokens are limited, so some drawings may have missing details or incomplete motion. Artwork is a reference, not proof of model degradation based on style alone.',
     allGroups: 'All groups',
     keepRule: 'Latest {count} per group',
     retentionRule: 'Auto-removed after {days} days',

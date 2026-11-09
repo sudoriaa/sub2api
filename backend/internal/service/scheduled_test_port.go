@@ -23,8 +23,15 @@ type PelicanTestConfig struct {
 	QuestionKind       string         `json:"question_kind,omitempty"`
 	TestChannel        string         `json:"test_channel,omitempty"`
 	Prompt             string         `json:"prompt"`
-	ReasoningEffort    string         `json:"reasoning_effort"`
-	ParallelCount      int            `json:"parallel_count"`
+	// Group-test questions retain only a site key ID, never its credential.
+	QuestionGenerator *PelicanQuestionGeneratorConfig `json:"question_generator,omitempty"`
+	FallbackPrompts   []string                        `json:"fallback_prompts,omitempty"`
+	// Execution-only metadata: Prompt contains the question actually asked.
+	QuestionSource          string `json:"question_source,omitempty"`
+	QuestionGenerationError string `json:"question_generation_error,omitempty"`
+	QuestionGenerationMS    int64  `json:"question_generation_ms,omitempty"`
+	ReasoningEffort         string `json:"reasoning_effort"`
+	ParallelCount           int    `json:"parallel_count"`
 	// ModelID is recorded with each result so later edits do not relabel history.
 	ModelID string `json:"model_id,omitempty"`
 	// ModelIDs selects all models in a quality round; old plans use ModelID.

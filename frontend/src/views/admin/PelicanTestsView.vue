@@ -189,6 +189,9 @@
                   <span class="result-badge" :class="result.status === 'success' ? 'badge-ok' : 'badge-bad'">
                     {{ t(result.status === 'success' ? 'pelicanTests.history.success' : 'pelicanTests.history.failed') }}
                   </span>
+                  <small v-if="result.pelican_config" :data-testid="`pelican-question-source-${result.id}`" :class="result.pelican_config.question_source === 'fallback' ? 'text-amber-600 dark:text-amber-400' : 'text-gray-500'" :title="result.pelican_config.question_generation_error">
+                    {{ t(`pelicanTests.history.source.${result.pelican_config.question_source || 'fixed'}`) }}
+                  </small>
                   <small v-if="result.status !== 'success'" class="error-text" :title="result.error_message">{{ result.error_message }}</small>
                 </td>
                 <td class="whitespace-nowrap tabular-nums">{{ pelicanDurationLabel(t, result.latency_ms) }}</td>
@@ -244,11 +247,44 @@
           <p class="field-hint">{{ t('pelicanTests.editor.modelHint') }}</p>
         </div>
         <div>
+          <div class="enable-row mb-0">
+            <span><strong>{{ t('pelicanTests.editor.generatorEnabled') }}</strong><small>{{ t('pelicanTests.editor.generatorHint') }}</small></span>
+            <Toggle v-model="editor.generatorEnabled" data-testid="pelican-generator-enabled" />
+          </div>
+          <div v-if="editor.generatorEnabled" class="mt-3 space-y-3 rounded-xl border border-gray-200 p-4 dark:border-dark-700" data-testid="pelican-generator-fields">
+            <div>
+              <label class="field-label mt-0" for="pelican-generator-key-search">{{ t('pelicanTests.editor.generatorKey') }}</label>
+              <div class="mb-2 flex gap-2">
+                <input id="pelican-generator-key-search" v-model="generatorKeySearch" class="input min-w-0 flex-1" maxlength="100" :placeholder="t('pelicanTests.editor.generatorKeySearch')" data-testid="pelican-generator-key-search" @keyup.enter.prevent="loadGeneratorKeys" />
+                <button type="button" class="btn btn-secondary" :disabled="generatorKeysLoading" data-testid="pelican-generator-key-search-button" @click="loadGeneratorKeys">{{ t('pelicanTests.editor.searchKeys') }}</button>
+              </div>
+              <Select v-model="editor.generator.api_key_id" :options="generatorKeyOptions" searchable :placeholder="t('pelicanTests.editor.generatorKeyPlaceholder')" :aria-label="t('pelicanTests.editor.generatorKey')" data-testid="pelican-generator-key" />
+              <p v-if="generatorKeysLoadFailed" role="alert" class="field-hint text-amber-600 dark:text-amber-400">{{ t('pelicanTests.editor.generatorKeysLoadFailed') }}</p>
+            </div>
+            <div>
+              <label class="field-label mt-0" for="pelican-generator-model">{{ t('pelicanTests.editor.generatorModel') }}</label>
+              <input id="pelican-generator-model" v-model.trim="editor.generator.model_id" maxlength="100" class="input w-full" :placeholder="t('pelicanTests.editor.modelPlaceholder')" data-testid="pelican-generator-model" />
+            </div>
+            <div>
+              <div class="flex items-center justify-between">
+                <label class="field-label mt-0" for="pelican-generator-prompt">{{ t('pelicanTests.editor.generatorPrompt') }}</label>
+                <button type="button" class="link-button text-xs" data-testid="pelican-generator-reset" @click="editor.generator.prompt = PELICAN_QUESTION_GENERATOR_PROMPT">{{ t('pelicanTests.editor.resetGeneratorPrompt') }}</button>
+              </div>
+              <textarea id="pelican-generator-prompt" v-model="editor.generator.prompt" rows="4" maxlength="32000" class="input w-full" data-testid="pelican-generator-prompt" />
+            </div>
+            <p class="field-hint">{{ t('pelicanTests.editor.generatorBillingHint') }}</p>
+          </div>
+        </div>
+        <div>
           <div class="flex items-center justify-between">
             <label class="field-label mt-0" for="pelican-test-prompt">{{ t('pelicanTests.editor.prompt') }}</label>
-            <button type="button" class="link-button text-xs" @click="editor.form.prompt = PELICAN_PROMPT">{{ t('pelicanTests.editor.resetPrompt') }}</button>
+            <button type="button" class="link-button text-xs" @click="editor.form.fallback_prompts = [PELICAN_PROMPT]">{{ t('pelicanTests.editor.resetPrompt') }}</button>
           </div>
-          <textarea id="pelican-test-prompt" v-model="editor.form.prompt" rows="3" maxlength="32000" class="input w-full" data-testid="pelican-test-prompt" />
+          <div v-for="(_, index) in editor.form.fallback_prompts" :key="index" class="mb-2 flex items-start gap-2">
+            <textarea :id="index === 0 ? 'pelican-test-prompt' : `pelican-test-prompt-${index}`" v-model="editor.form.fallback_prompts[index]" rows="3" maxlength="32000" class="input min-w-0 flex-1" :aria-label="t('pelicanTests.editor.fallbackQuestion', { number: index + 1 })" :data-testid="index === 0 ? 'pelican-test-prompt' : `pelican-test-prompt-${index}`" />
+            <button type="button" class="btn btn-secondary px-2" :disabled="editor.form.fallback_prompts.length <= 1" :aria-label="t('pelicanTests.editor.removeFallback', { number: index + 1 })" :data-testid="`pelican-fallback-remove-${index}`" @click="editor.form.fallback_prompts.splice(index, 1)"><Icon name="trash" size="sm" /></button>
+          </div>
+          <button type="button" class="link-button text-xs" :disabled="editor.form.fallback_prompts.length >= 20" data-testid="pelican-fallback-add" @click="editor.form.fallback_prompts.push('')">{{ t('pelicanTests.editor.addFallback') }}</button>
           <p class="field-hint">{{ t('pelicanTests.editor.promptHint') }}</p>
         </div>
         <div class="grid gap-4 sm:grid-cols-2">
@@ -296,6 +332,11 @@
       @close="preview = null"
     >
       <div v-if="preview" class="flex min-h-0 flex-1 flex-col gap-3" data-testid="pelican-result-preview">
+        <details v-if="preview.result.pelican_config?.prompt" class="shrink-0 rounded-lg border border-gray-200 p-3 text-sm dark:border-dark-700" data-testid="pelican-actual-question">
+          <summary class="cursor-pointer">{{ t('pelicanTests.history.actualQuestion') }} · {{ t(`pelicanTests.history.source.${preview.result.pelican_config.question_source || 'fixed'}`) }}</summary>
+          <p class="mt-2 max-h-32 overflow-auto whitespace-pre-wrap">{{ preview.result.pelican_config.prompt }}</p>
+          <p v-if="preview.result.pelican_config.question_generation_error" class="mt-2 text-xs text-amber-600 dark:text-amber-400">{{ t('pelicanTests.history.generatorFailed') }}: {{ preview.result.pelican_config.question_generation_error }}</p>
+        </details>
         <div class="min-h-0 flex-1 overflow-hidden rounded-xl border border-gray-200 bg-gray-100 dark:border-dark-700 dark:bg-dark-900">
           <PelicanArtworkPreview v-if="preview.status === 'ready'" :html="preview.html" :title="previewTitle" />
           <div v-else class="flex h-full items-center justify-center p-6 text-sm text-gray-500">
@@ -355,13 +396,15 @@ import {
   type PelicanGroupTestPlanInput,
   type PelicanGroupTestResult,
   type PelicanShowcaseSettings,
+  type PelicanQuestionGeneratorConfig,
+  type PelicanQuestionGeneratorKey,
 } from '@/api/admin/pelicanTests'
 import { useAppStore } from '@/stores/app'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import type { AdminGroup, GroupPlatform } from '@/types'
 import { extractApiErrorCode, extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateTimeToMinute } from '@/utils/format'
-import { PELICAN_PROMPT } from '@/utils/intelligenceTest'
+import { PELICAN_PROMPT, PELICAN_QUESTION_GENERATOR_PROMPT } from '@/utils/intelligenceTest'
 import { extractPelicanHtml } from '@/utils/pelicanHtml'
 import { platformBadgeLightClass, platformLabel } from '@/utils/platformColors'
 
@@ -398,7 +441,13 @@ const savingPlan = ref(false)
 const error = ref('')
 const notice = ref('')
 const pending = reactive<Record<number, string>>({})
-const editor = ref<{ id: number | null; groupName: string; form: PelicanGroupTestPlanInput; schedule: string } | null>(null)
+type EditorInput = PelicanGroupTestPlanInput & { fallback_prompts: string[] }
+const editor = ref<{ id: number | null; groupName: string; form: EditorInput; schedule: string; generatorEnabled: boolean; generator: PelicanQuestionGeneratorConfig } | null>(null)
+const generatorKeys = ref<PelicanQuestionGeneratorKey[]>([])
+const generatorKeySearch = ref('')
+const generatorKeysLoading = ref(false)
+const generatorKeysLoadFailed = ref(false)
+let generatorKeysRequest = 0
 const deleting = ref<PelicanGroupTestPlan | null>(null)
 const preview = ref<{ result: PelicanGroupTestResult; html: string; status: 'loading' | 'ready' | 'invalid' | 'error' } | null>(null)
 let alive = true
@@ -418,6 +467,18 @@ const groupOptions = computed(() => {
   return options
 })
 const effortOptions = computed(() => EFFORTS.map((value) => ({ value, label: effortLabel(value) })))
+const generatorKeyOptions = computed(() => {
+  const options = generatorKeys.value.map(key => ({
+    value: key.id,
+    label: `${key.name || `#${key.id}`} · #${key.id} · ${t('pelicanTests.editor.keyOwner', { id: key.user_id })}${key.available ? '' : ` · ${t('pelicanTests.editor.keyUnavailable')}`}`,
+    disabled: !key.available,
+  }))
+  const selected = editor.value?.generator.api_key_id
+  if (selected && !options.some(option => option.value === selected)) {
+    options.unshift({ value: selected, label: `#${selected} · ${t('pelicanTests.editor.keyUnavailable')}`, disabled: true })
+  }
+  return options
+})
 const scheduleOptions = computed(() => [
   ...SCHEDULES.map((schedule) => ({ value: schedule.cron, label: t(`pelicanTests.schedules.${schedule.key}`) })),
   { value: 'custom', label: t('pelicanTests.schedules.custom') },
@@ -578,7 +639,24 @@ async function loadGroups() {
   }
 }
 
-function inputFrom(plan: PelicanGroupTestPlan): PelicanGroupTestPlanInput {
+async function loadGeneratorKeys() {
+  const current = editor.value
+  if (!current) return
+  const request = ++generatorKeysRequest
+  generatorKeysLoading.value = true
+  try {
+    const keys = await pelicanTestsAPI.listGeneratorKeys(generatorKeySearch.value.trim(), current.generator.api_key_id)
+    if (!alive || request !== generatorKeysRequest || editor.value !== current) return
+    generatorKeys.value = keys
+    generatorKeysLoadFailed.value = false
+  } catch {
+    if (alive && request === generatorKeysRequest && editor.value === current) generatorKeysLoadFailed.value = true
+  } finally {
+    if (alive && request === generatorKeysRequest) generatorKeysLoading.value = false
+  }
+}
+
+function inputFrom(plan: PelicanGroupTestPlan): EditorInput {
   return {
     group_id: plan.group_id,
     model_id: plan.model_id,
@@ -587,29 +665,46 @@ function inputFrom(plan: PelicanGroupTestPlan): PelicanGroupTestPlanInput {
     prompt: plan.pelican_config?.prompt || PELICAN_PROMPT,
     reasoning_effort: plan.pelican_config?.reasoning_effort || 'medium',
     parallel_count: plan.pelican_config?.parallel_count || 1,
+    fallback_prompts: plan.pelican_config?.fallback_prompts?.length ? [...plan.pelican_config.fallback_prompts] : [plan.pelican_config?.prompt || PELICAN_PROMPT],
+    question_generator: plan.pelican_config?.question_generator ? { ...plan.pelican_config.question_generator } : null,
   }
 }
 
 function openEditor(plan?: PelicanGroupTestPlan) {
-  const form: PelicanGroupTestPlanInput = plan
+  const form: EditorInput = plan
     ? inputFrom(plan)
-    : { group_id: 0, model_id: '', cron_expression: SCHEDULES[1].cron, enabled: true, prompt: PELICAN_PROMPT, reasoning_effort: 'medium', parallel_count: 1 }
+    : { group_id: 0, model_id: '', cron_expression: SCHEDULES[1].cron, enabled: true, prompt: PELICAN_PROMPT, reasoning_effort: 'medium', parallel_count: 1, fallback_prompts: [PELICAN_PROMPT], question_generator: null }
   const schedule = SCHEDULES.some((preset) => preset.cron === form.cron_expression) ? form.cron_expression : 'custom'
-  editor.value = { id: plan?.id ?? null, groupName: plan?.group_name ?? '', form, schedule }
+  editor.value = { id: plan?.id ?? null, groupName: plan?.group_name ?? '', form, schedule, generatorEnabled: plan ? !!form.question_generator : true,
+    generator: form.question_generator ? { ...form.question_generator } : { api_key_id: 0, model_id: '', prompt: PELICAN_QUESTION_GENERATOR_PROMPT } }
+  generatorKeySearch.value = ''
   void loadGroups()
+  void loadGeneratorKeys()
 }
 
 async function savePlan() {
   const current = editor.value
   if (!current || savingPlan.value) return
   const form = current.form
-  if (!form.group_id || !form.model_id.trim() || !form.prompt.trim() || !form.cron_expression.trim()) {
+  if (!form.group_id || !form.model_id.trim() || !form.cron_expression.trim()) {
     fail(null, t('pelicanTests.editor.required'))
+    return
+  }
+  const fallbacks = form.fallback_prompts.map(prompt => prompt.trim())
+  const bytes = (text: string) => new TextEncoder().encode(text).length
+  if (!fallbacks.length || fallbacks.length > 20 || fallbacks.some(prompt => !prompt || bytes(prompt) > 32000) || fallbacks.reduce((total, prompt) => total + bytes(prompt), 0) > 128000) {
+    fail(null, t('pelicanTests.editor.fallbackRequired'))
+    return
+  }
+  const generator = current.generator
+  if (current.generatorEnabled && (!generator.api_key_id || !generator.model_id.trim() || !generator.prompt.trim() || bytes(generator.model_id) > 100 || bytes(generator.prompt) > 32000)) {
+    fail(null, t('pelicanTests.editor.generatorRequired'))
     return
   }
   savingPlan.value = true
   try {
-    const input = { ...form, parallel_count: Number(form.parallel_count) || 1 }
+    const input = { ...form, prompt: fallbacks[0], fallback_prompts: fallbacks, parallel_count: Number(form.parallel_count) || 1,
+      question_generator: current.generatorEnabled ? { api_key_id: Number(generator.api_key_id), model_id: generator.model_id.trim(), prompt: generator.prompt.trim() } : null }
     if (current.id) {
       await pelicanTestsAPI.updatePlan(current.id, input)
       succeed(t('pelicanTests.editor.updated'))

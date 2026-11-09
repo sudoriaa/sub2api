@@ -178,7 +178,7 @@ func RegisterUserRoutes(
 			monitors.GET("/:id/status", h.ChannelMonitor.GetStatus)
 		}
 
-		// 鹈鹕测智展示（用户只读；功能关闭时返回空画廊）
+		// 降智检测展示（用户只读；功能关闭时返回空画廊）
 		showcase := authenticated.Group("/pelican-showcase")
 		{
 			showcase.GET("", h.PelicanShowcase.List)

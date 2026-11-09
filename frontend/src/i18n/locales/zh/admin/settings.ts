@@ -101,9 +101,9 @@ export default {
           enabledHint: '关闭后用户端侧边栏入口隐藏，接口返回空数组。',
         },
         pelicanShowcase: {
-          title: '鹈鹕测智展示',
-          movedHint: '展示开关、保留规则和按分组的定时测试都移到了「智能运维 → 鹈鹕测智」。',
-          movedLink: '前往鹈鹕测智',
+          title: '降智检测展示',
+          movedHint: '展示开关、保留规则和按分组的定时测试都移到了「智能运维 → 降智检测」。',
+          movedLink: '前往降智检测',
         },
         siteBillingMode: {
           title: '站点类型',

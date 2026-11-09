@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import PelicanTestsView from '../PelicanTestsView.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import type { PelicanGroupTestPlan, PelicanGroupTestResult } from '@/api/admin/pelicanTests'
+import { PELICAN_QUESTION_GENERATOR_PROMPT } from '@/utils/intelligenceTest'
 
 const api = vi.hoisted(() => ({
   listPlans: vi.fn(),
+  listGeneratorKeys: vi.fn(),
   createPlan: vi.fn(),
   updatePlan: vi.fn(),
   deletePlan: vi.fn(),
@@ -83,6 +85,7 @@ beforeEach(() => {
   for (const fn of Object.values(api)) fn.mockReset()
   api.listPlans.mockResolvedValue([plan(), plan({ id: 8, group_id: 5, group_name: '迁移来的分组', model_id: '', enabled: false, last_run_at: null, next_run_at: null, last_result: undefined })])
   api.getShowcaseSettings.mockResolvedValue({ ...settings })
+  api.listGeneratorKeys.mockResolvedValue([{ id: 3, name: '出题 Key', user_id: 1, status: 'active', available: true }])
   api.listResults.mockResolvedValue({ items: [result(), result({ id: 89, status: 'failed', account_id: 0, account_name: '', attempts: [], error_message: 'no_available_account: no available accounts' })], total: 2 })
   getGroups.mockReset().mockResolvedValue([
     { id: 4, name: 'GPT PRO号池', platform: 'openai', status: 'active' },
@@ -187,6 +190,7 @@ describe('PelicanTestsView', () => {
     await flushPromises()
     await wrapper.get('[data-testid="pelican-tests-create"]').trigger('click')
     await flushPromises()
+    await wrapper.get('[data-testid="pelican-generator-enabled"]').setValue(false)
     const editor = wrapper.get('[data-testid="pelican-test-editor"]')
     const selects = editor.findAll('select')
     expect(selects[0].findAll('option').map((option) => option.text())).toEqual(['GPT PRO号池 · OpenAI', 'Claude Max · Anthropic'])
@@ -254,6 +258,7 @@ describe('PelicanTestsView', () => {
     expect(api.updatePlan).toHaveBeenCalledWith(7, {
       group_id: 4, model_id: 'gpt-6-astra', cron_expression: '*/30 * * * *', enabled: false,
       prompt: 'draw a pelican', reasoning_effort: 'high', parallel_count: 2,
+      fallback_prompts: ['draw a pelican'], question_generator: null,
     })
 
     api.updatePlan.mockClear()
@@ -262,6 +267,108 @@ describe('PelicanTestsView', () => {
     expect(api.updatePlan).not.toHaveBeenCalled()
     const editor = wrapper.get('[data-testid="pelican-test-editor"]')
     expect((editor.get('[data-testid="pelican-test-enabled"]').element as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('creates AI-generated questions with a site Key, custom prompt and multiple fallbacks', async () => {
+    api.createPlan.mockResolvedValue(plan({ id: 9 }))
+    wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-testid="pelican-tests-create"]').trigger('click')
+    await flushPromises()
+    const editor = wrapper.get('[data-testid="pelican-test-editor"]')
+    expect(editor.get('[data-testid="pelican-generator-enabled"]').element).toHaveProperty('checked', true)
+    expect((editor.get('[data-testid="pelican-generator-prompt"]').element as HTMLTextAreaElement).value).toBe(PELICAN_QUESTION_GENERATOR_PROMPT)
+    await editor.findAll('select')[0].setValue('4')
+    await editor.get('[data-testid="pelican-test-model"]').setValue('tested-model')
+    await editor.get('[data-testid="pelican-generator-key"]').setValue('3')
+    await editor.get('[data-testid="pelican-generator-model"]').setValue('generator-model')
+    await editor.get('[data-testid="pelican-generator-prompt"]').setValue('我自定义的出题提示词')
+    await editor.get('[data-testid="pelican-test-prompt"]').setValue('猫打篮球')
+    await editor.get('[data-testid="pelican-fallback-add"]').trigger('click')
+    await editor.get('[data-testid="pelican-test-prompt-1"]').setValue('皮卡丘游泳')
+    await editor.trigger('submit')
+    await flushPromises()
+    expect(api.createPlan).toHaveBeenCalledWith(expect.objectContaining({
+      model_id: 'tested-model', prompt: '猫打篮球', fallback_prompts: ['猫打篮球', '皮卡丘游泳'],
+      question_generator: { api_key_id: 3, model_id: 'generator-model', prompt: '我自定义的出题提示词' },
+    }))
+  })
+
+  it('validates generation settings and nonempty fallback questions before saving', async () => {
+    wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-testid="pelican-tests-create"]').trigger('click')
+    await flushPromises()
+    const editor = wrapper.get('[data-testid="pelican-test-editor"]')
+    await editor.findAll('select')[0].setValue('4')
+    await editor.get('[data-testid="pelican-test-model"]').setValue('tested-model')
+    await editor.trigger('submit')
+    expect(api.createPlan).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('pelicanTests.editor.generatorRequired')
+    await editor.get('[data-testid="pelican-generator-enabled"]').setValue(false)
+    await editor.get('[data-testid="pelican-fallback-add"]').trigger('click')
+    await editor.trigger('submit')
+    expect(wrapper.text()).toContain('pelicanTests.editor.fallbackRequired')
+    await editor.get('[data-testid="pelican-fallback-remove-1"]').trigger('click')
+    expect(editor.find('[data-testid="pelican-test-prompt-1"]').exists()).toBe(false)
+    expect(editor.get('[data-testid="pelican-fallback-remove-0"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('restores and preserves an edited generator, and removes it only when disabled', async () => {
+    const generated = plan({ pelican_config: { prompt: 'A', reasoning_effort: 'high', parallel_count: 2,
+      fallback_prompts: ['A', 'B'], question_generator: { api_key_id: 3, model_id: 'generator-model', prompt: 'saved prompt' } } })
+    api.listPlans.mockResolvedValue([generated])
+    api.updatePlan.mockResolvedValue(generated)
+    wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-testid="pelican-plan-edit-7"]').trigger('click')
+    await flushPromises()
+    let editor = wrapper.get('[data-testid="pelican-test-editor"]')
+    expect((editor.get('[data-testid="pelican-generator-prompt"]').element as HTMLTextAreaElement).value).toBe('saved prompt')
+    expect((editor.get('[data-testid="pelican-test-prompt-1"]').element as HTMLTextAreaElement).value).toBe('B')
+    await editor.get('[data-testid="pelican-generator-reset"]').trigger('click')
+    await editor.trigger('submit')
+    await flushPromises()
+    expect(api.updatePlan).toHaveBeenCalledWith(7, expect.objectContaining({
+      fallback_prompts: ['A', 'B'], question_generator: { api_key_id: 3, model_id: 'generator-model', prompt: PELICAN_QUESTION_GENERATOR_PROMPT },
+    }))
+    await wrapper.get('[data-testid="pelican-plan-edit-7"]').trigger('click')
+    await flushPromises()
+    editor = wrapper.get('[data-testid="pelican-test-editor"]')
+    await editor.get('[data-testid="pelican-generator-enabled"]').setValue(false)
+    await editor.trigger('submit')
+    await flushPromises()
+    expect(api.updatePlan).toHaveBeenLastCalledWith(7, expect.objectContaining({ fallback_prompts: ['A', 'B'], question_generator: null }))
+  })
+
+  it('searches key names and explains unavailable saved keys without changing them', async () => {
+    api.listPlans.mockResolvedValue([plan({ pelican_config: { prompt: 'A', reasoning_effort: 'high', parallel_count: 1,
+      question_generator: { api_key_id: 99, model_id: 'm', prompt: 'p' } } })])
+    wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-testid="pelican-plan-edit-7"]').trigger('click')
+    await flushPromises()
+    expect(api.listGeneratorKeys).toHaveBeenCalledWith('', 99)
+    expect(wrapper.get('[data-testid="pelican-generator-key"]').text()).toContain('#99')
+    expect(wrapper.get('[data-testid="pelican-generator-key"]').text()).toContain('pelicanTests.editor.keyUnavailable')
+    await wrapper.get('[data-testid="pelican-generator-key-search"]').setValue('出题')
+    await wrapper.get('[data-testid="pelican-generator-key-search-button"]').trigger('click')
+    await flushPromises()
+    expect(api.listGeneratorKeys).toHaveBeenLastCalledWith('出题', 99)
+  })
+
+  it('shows AI/fallback provenance and the actual saved question with the artwork', async () => {
+    const fallback = result({ pelican_config: { prompt: '猫打篮球', reasoning_effort: 'high', parallel_count: 1,
+      question_source: 'fallback', question_generation_error: 'generator_http_429' } })
+    api.listResults.mockResolvedValue({ items: [fallback], total: 1 })
+    api.getResult.mockResolvedValue({ ...fallback, response_text: '<svg></svg>' })
+    wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.get('[data-testid="pelican-question-source-90"]').text()).toBe('pelicanTests.history.source.fallback')
+    await wrapper.get('[data-testid="pelican-result-view-90"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="pelican-actual-question"]').text()).toContain('猫打篮球')
+    expect(wrapper.get('[data-testid="pelican-actual-question"]').text()).toContain('generator_http_429')
   })
 
   it('deletes a test after confirmation', async () => {

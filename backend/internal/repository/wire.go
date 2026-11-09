@@ -96,8 +96,8 @@ var ProviderSet = wire.NewSet(
 	NewScheduledTestPlanRepository,   // 定时测试计划仓储
 	NewScheduledTestResultRepository, // 定时测试结果仓储
 	NewQualityRuleTemplateRepository, // 质量运维分组规则仓储
-	NewPelicanShowcaseRepository,     // 鹈鹕测智用户展示快照仓储
-	NewPelicanGroupTestRepository,    // 鹈鹕测智分组测试计划与结果仓储
+	NewPelicanShowcaseRepository,     // 降智检测用户展示快照仓储
+	NewPelicanGroupTestRepository,    // 降智检测分组测试计划与结果仓储
 	NewControlledExperimentRepository,
 	NewProxyRepository,
 	NewRedeemCodeRepository,

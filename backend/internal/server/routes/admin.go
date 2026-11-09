@@ -155,7 +155,7 @@ func RegisterAdminRoutes(
 		registerScheduledTestRoutes(admin, h)
 		registerControlledExperimentRoutes(admin, h)
 
-		// 鹈鹕测智用户展示
+		// 降智检测用户展示
 		registerPelicanShowcaseRoutes(admin, h)
 
 		// 渠道管理
@@ -1025,6 +1025,7 @@ func registerPelicanShowcaseRoutes(admin *gin.RouterGroup, h *handler.Handlers) 
 	admin.PUT("/pelican-showcase/settings", h.PelicanShowcase.UpdateSettings)
 	admin.DELETE("/pelican-showcase/items/:id", h.PelicanShowcase.DeleteItem)
 	admin.GET("/pelican-group-tests", h.Admin.PelicanGroupTest.ListPlans)
+	admin.GET("/pelican-group-tests/generator-keys", h.Admin.PelicanGroupTest.ListGeneratorKeys)
 	admin.POST("/pelican-group-tests", h.Admin.PelicanGroupTest.CreatePlan)
 	admin.PUT("/pelican-group-tests/:id", h.Admin.PelicanGroupTest.UpdatePlan)
 	admin.DELETE("/pelican-group-tests/:id", h.Admin.PelicanGroupTest.DeletePlan)

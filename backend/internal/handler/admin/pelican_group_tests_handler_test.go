@@ -83,7 +83,7 @@ func TestPelicanGroupTestHandlerStatusCodes(t *testing.T) {
 	for id := int64(60); id > 0; id-- {
 		repo.results = append(repo.results, &service.PelicanGroupTestResult{ID: id, Status: "success"})
 	}
-	h := NewPelicanGroupTestHandler(service.NewPelicanGroupTestService(repo, groupTestHandlerGroups{}, nil, nil, nil, nil, nil, nil))
+	h := NewPelicanGroupTestHandler(service.NewPelicanGroupTestService(repo, groupTestHandlerGroups{}, nil, nil, nil, nil, nil, nil, nil, nil))
 
 	w := serveGroupTest(h.ListPlans, http.MethodGet, "/plans", "/plans", "")
 	require.Equal(t, http.StatusOK, w.Code)
@@ -130,4 +130,33 @@ func TestPelicanGroupTestHandlerStatusCodes(t *testing.T) {
 		require.Equal(t, http.StatusBadRequest, serveGroupTest(h.ListResults, http.MethodGet, "/results", "/results?"+query, "").Code)
 	}
 	require.Equal(t, http.StatusNotFound, serveGroupTest(h.GetResult, http.MethodGet, "/results/:id", "/results/5", "").Code)
+}
+
+type generatorHandlerKeys struct{ service.APIKeyRepository }
+
+func (generatorHandlerKeys) GetByID(context.Context, int64) (*service.APIKey, error) {
+	return &service.APIKey{ID: 3, Name: "Question Key", UserID: 1, Key: "synthetic-secret", Status: service.StatusActive}, nil
+}
+func (generatorHandlerKeys) SearchAPIKeys(context.Context, int64, string, int) ([]service.APIKey, error) {
+	return []service.APIKey{{ID: 3, Name: "Question Key", UserID: 1, Key: "synthetic-secret", Status: service.StatusActive}}, nil
+}
+
+func TestPelicanGroupTestHandlerGeneratorInputAndSafeKeyList(t *testing.T) {
+	repo := &groupTestHandlerRepo{plans: map[int64]*service.PelicanGroupTestPlan{}}
+	h := NewPelicanGroupTestHandler(service.NewPelicanGroupTestService(repo, groupTestHandlerGroups{}, nil, nil, nil, nil, nil, nil, generatorHandlerKeys{}, nil))
+	w := serveGroupTest(h.ListGeneratorKeys, http.MethodGet, "/keys", "/keys?q=Question&selected_id=3", "")
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), `"name":"Question Key"`)
+	require.NotContains(t, w.Body.String(), "synthetic-secret")
+	require.NotContains(t, w.Body.String(), `"key":`)
+	for _, query := range []string{"selected_id=-1", "selected_id=invalid"} {
+		require.Equal(t, http.StatusBadRequest, serveGroupTest(h.ListGeneratorKeys, http.MethodGet, "/keys", "/keys?"+query, "").Code)
+	}
+	w = serveGroupTest(h.CreatePlan, http.MethodPost, "/plans", "/plans", `{"group_id":4,"model_id":"tested","reasoning_effort":"high","question_generator":{"api_key_id":3,"model_id":"generator"},"fallback_prompts":["animal scene","anime scene"]}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"api_key_id":3`)
+	require.Contains(t, w.Body.String(), `"fallback_prompts":["animal scene","anime scene"]`)
+	require.NotContains(t, w.Body.String(), "synthetic-secret")
+	bad := serveGroupTest(h.CreatePlan, http.MethodPost, "/plans", "/plans", `{"group_id":4,"model_id":"tested","reasoning_effort":"high","question_generator":{"api_key_id":3,"model_id":"generator"},"fallback_prompts":[]}`)
+	require.Equal(t, http.StatusBadRequest, bad.Code)
 }

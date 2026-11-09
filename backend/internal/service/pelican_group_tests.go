@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -93,13 +94,15 @@ type PelicanGroupTestResult struct {
 
 // PelicanGroupTestPlanInput is what an admin edits; the question is always the HTML drawing kind.
 type PelicanGroupTestPlanInput struct {
-	GroupID         int64  `json:"group_id"`
-	ModelID         string `json:"model_id"`
-	CronExpression  string `json:"cron_expression"`
-	Enabled         bool   `json:"enabled"`
-	Prompt          string `json:"prompt"`
-	ReasoningEffort string `json:"reasoning_effort"`
-	ParallelCount   int    `json:"parallel_count"`
+	GroupID           int64                           `json:"group_id"`
+	ModelID           string                          `json:"model_id"`
+	CronExpression    string                          `json:"cron_expression"`
+	Enabled           bool                            `json:"enabled"`
+	Prompt            string                          `json:"prompt"`
+	ReasoningEffort   string                          `json:"reasoning_effort"`
+	ParallelCount     int                             `json:"parallel_count"`
+	QuestionGenerator *PelicanQuestionGeneratorConfig `json:"question_generator"`
+	FallbackPrompts   []string                        `json:"fallback_prompts"`
 }
 
 type PelicanGroupTestRepository interface {
@@ -144,13 +147,14 @@ type pelicanGroupTestGroups interface {
 }
 
 type PelicanGroupTestService struct {
-	repo       PelicanGroupTestRepository
-	groups     pelicanGroupTestGroups
-	router     pelicanGroupRouter
-	runAccount func(ctx context.Context, accountID int64, model string, cfg *PelicanTestConfig) (*ScheduledTestResult, error)
-	showcase   *PelicanShowcaseService
-	billing    *BillingService
-	now        func() time.Time
+	repo              PelicanGroupTestRepository
+	groups            pelicanGroupTestGroups
+	router            pelicanGroupRouter
+	runAccount        func(ctx context.Context, accountID int64, model string, cfg *PelicanTestConfig) (*ScheduledTestResult, error)
+	showcase          *PelicanShowcaseService
+	billing           *BillingService
+	questionGenerator *pelicanQuestionGenerator
+	now               func() time.Time
 	// runs tracks background runs so tests can wait for them.
 	runs sync.WaitGroup
 }
@@ -164,15 +168,18 @@ func NewPelicanGroupTestService(
 	accountTest *AccountTestService,
 	showcase *PelicanShowcaseService,
 	billing *BillingService,
+	apiKeys APIKeyRepository,
+	cfg *config.Config,
 ) *PelicanGroupTestService {
 	return &PelicanGroupTestService{
-		repo:       repo,
-		groups:     groupRepo,
-		router:     &gatewayPelicanGroupRouter{gateway: gateway, openai: openai, concurrency: concurrency, slotWait: pelicanGroupTestSlotWait},
-		runAccount: accountTest.RunPelicanBackground,
-		showcase:   showcase,
-		billing:    billing,
-		now:        time.Now,
+		repo:              repo,
+		groups:            groupRepo,
+		router:            &gatewayPelicanGroupRouter{gateway: gateway, openai: openai, concurrency: concurrency, slotWait: pelicanGroupTestSlotWait},
+		runAccount:        accountTest.RunPelicanBackground,
+		showcase:          showcase,
+		billing:           billing,
+		questionGenerator: newPelicanQuestionGenerator(apiKeys, cfg),
+		now:               time.Now,
 	}
 }
 
@@ -245,9 +252,13 @@ func (s *PelicanGroupTestService) planFromInput(ctx context.Context, input Pelic
 	if plan.ModelID == "" || len(plan.ModelID) > 100 {
 		return nil, infraerrors.BadRequest("INVALID_PELICAN_GROUP_TEST", "model is required (maximum 100 bytes)")
 	}
-	prompt := strings.TrimSpace(input.Prompt)
-	if prompt == "" || len(prompt) > 32000 {
-		return nil, infraerrors.BadRequest("INVALID_PELICAN_GROUP_TEST", "prompt is required (maximum 32000 bytes)")
+	prompt, fallbacks, err := normalizePelicanGroupFallbacks(input.Prompt, input.FallbackPrompts)
+	if err != nil {
+		return nil, err
+	}
+	generator, err := s.validateQuestionGenerator(ctx, input.QuestionGenerator, current)
+	if err != nil {
+		return nil, err
 	}
 	effort := normalizePelicanReasoningEffort(input.ReasoningEffort)
 	if effort == "" {
@@ -271,6 +282,8 @@ func (s *PelicanGroupTestService) planFromInput(ctx context.Context, input Pelic
 	plan.NextRunAt = &next
 	plan.Enabled = input.Enabled
 	plan.PelicanConfig = &PelicanTestConfig{QuestionKind: "pelican", Prompt: prompt, ReasoningEffort: effort, ParallelCount: parallel, ModelID: plan.ModelID}
+	plan.PelicanConfig.QuestionGenerator = generator
+	plan.PelicanConfig.FallbackPrompts = fallbacks
 	return plan, nil
 }
 
@@ -433,6 +446,15 @@ func (s *PelicanGroupTestService) runSample(ctx context.Context, plan *PelicanGr
 			logger.LegacyPrintf("service.pelican_group_test", "plan=%d group=%d sample panicked", plan.ID, plan.GroupID)
 		}
 	}()
+	// Generate once per sample before acquiring an answering-account slot. Every
+	// retry uses the same resolved question; parallel samples never mutate a plan.
+	resolved := *plan
+	question, questionErr := s.prepareGroupQuestion(ctx, plan.PelicanConfig)
+	resolved.PelicanConfig = question
+	plan = &resolved
+	if questionErr != nil {
+		return s.newResult(plan, started, s.now(), questionErr.Error())
+	}
 	excluded := make(map[int64]struct{})
 	attempts := []PelicanGroupTestAttempt{}
 	var lastSample *ScheduledTestResult
@@ -474,7 +496,7 @@ func (s *PelicanGroupTestService) runSample(ctx context.Context, plan *PelicanGr
 			result = s.newResult(plan, started, s.now(), sample.ErrorMessage)
 			result.Status = sample.Status
 			result.ResponseText = sample.ResponseText
-			if len(attempts) == 0 {
+			if len(attempts) == 0 && (plan.PelicanConfig == nil || plan.PelicanConfig.QuestionGenerator == nil) {
 				result.LatencyMs = sample.LatencyMs
 			}
 			result.AccountID, result.AccountName, result.Attempts = route.account.ID, route.account.Name, attempts

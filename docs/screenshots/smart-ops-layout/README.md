@@ -9,11 +9,11 @@
 | 页面 | 修复前，2560 × 1100 | 修复后，2560 × 1100 | 修复后，390 × 1100 |
 | --- | --- | --- | --- |
 | 凭证运营 | [宽屏](https://github.com/ranxi2001/sub2api/blob/297e9201a2f6d6fe70073b370a5b71f49579accf/docs/screenshots/smart-ops-layout/token-guard-v2-before-desktop.png) | [宽屏](https://github.com/ranxi2001/sub2api/blob/297e9201a2f6d6fe70073b370a5b71f49579accf/docs/screenshots/smart-ops-layout/token-guard-v2-after-desktop.png) | [手机端](https://github.com/ranxi2001/sub2api/blob/297e9201a2f6d6fe70073b370a5b71f49579accf/docs/screenshots/smart-ops-layout/token-guard-v2-after-mobile.png) |
-| 鹈鹕测智 | [宽屏](https://github.com/ranxi2001/sub2api/blob/297e9201a2f6d6fe70073b370a5b71f49579accf/docs/screenshots/smart-ops-layout/pelican-tests-before-desktop.png) | [宽屏](https://github.com/ranxi2001/sub2api/blob/297e9201a2f6d6fe70073b370a5b71f49579accf/docs/screenshots/smart-ops-layout/pelican-tests-after-desktop.png) | [手机端](https://github.com/ranxi2001/sub2api/blob/297e9201a2f6d6fe70073b370a5b71f49579accf/docs/screenshots/smart-ops-layout/pelican-tests-after-mobile.png) |
+| 降智检测 | [宽屏](https://github.com/ranxi2001/sub2api/blob/297e9201a2f6d6fe70073b370a5b71f49579accf/docs/screenshots/smart-ops-layout/pelican-tests-before-desktop.png) | [宽屏](https://github.com/ranxi2001/sub2api/blob/297e9201a2f6d6fe70073b370a5b71f49579accf/docs/screenshots/smart-ops-layout/pelican-tests-after-desktop.png) | [手机端](https://github.com/ranxi2001/sub2api/blob/297e9201a2f6d6fe70073b370a5b71f49579accf/docs/screenshots/smart-ops-layout/pelican-tests-after-mobile.png) |
 
 ## 验收
 
-- 修复前，两页在 2560px 视口下的内容宽度均为 1660px，左右留白；侧栏顺序为“凭证守护 → 鹈鹕测智 → 凭证运营”，与顶部标签不一致。
+- 修复前，两页在 2560px 视口下的内容宽度均为 1660px，左右留白；侧栏顺序为“凭证守护 → 降智检测 → 凭证运营”，与顶部标签不一致。
 - 修复后，两页沿用凭证守护的全宽布局；三个页面在 2560、1440、390px 视口下的内容宽度均等于主内容区可用宽度，且没有页面横向溢出。
-- 三个页面的侧栏与顶部标签均按“自动配置 → 优先调度 → 质量运维 → 账号运维 → 凭证守护 → 凭证运营 → 鹈鹕测智”排列。
+- 三个页面的侧栏与顶部标签均按“自动配置 → 优先调度 → 质量运维 → 账号运维 → 凭证守护 → 凭证运营 → 降智检测”排列。
 - 手机端截图展示首屏，不是完整长页面。浏览器验证覆盖布局和导航，未使用真实账号执行巡检、重新登录或模型请求。

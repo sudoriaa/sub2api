@@ -661,9 +661,9 @@ export default {
 
   // Pelican showcase (user-facing gallery)
   pelicanShowcase: {
-    title: '鹈鹕测智',
-    description: '各分组的模型定时完成同一道绘图题，直接看生成的作品，直观比较模型水平',
-    notice: '由于鹈鹕测智页面限制了模型的最大token所以展示的图可能有些鹈鹕没有腿或者轮子不转，这是正常的。只要风格对的话就是没有降智。',
+    title: '降智检测',
+    description: '各分组的模型定时完成 AI 生成或题库中的绘图题，直接查看作品，辅助比较模型表现',
+    notice: '测试限制了最大输出 token，部分作品可能出现细节缺失或动作不完整。作品仅供参考，不能单凭画风确定模型是否降智。',
     allGroups: '全部分组',
     keepRule: '每组保留最近 {count} 张',
     retentionRule: '超过 {days} 天自动清理',
@@ -671,7 +671,7 @@ export default {
     latestAt: '最近更新 {time}',
     groupEmpty: '该分组还没有作品，定时测试成功生成后会出现在这里',
     scrollLabel: '{group}：拖动滑块查看更早的作品',
-    loadError: '加载鹈鹕测智失败',
+    loadError: '加载降智检测失败',
     itemLoading: '作品加载中…',
     itemLoadError: '作品加载失败',
     invalidHtml: '这张作品无法显示',
@@ -691,7 +691,7 @@ export default {
     previewSizing: '预览缩放',
     sandboxNote: '作品在隔离沙箱中运行，不能联网，也读取不到你的账号信息。',
     remove: '从展示中移除',
-    removeConfirm: '确定把这张作品从鹈鹕测智中移除吗？移除后所有用户都看不到它，此操作不能撤销。',
+    removeConfirm: '确定把这张作品从降智检测中移除吗？移除后所有用户都看不到它，此操作不能撤销。',
     removed: '已从展示中移除',
     removeFailed: '移除失败',
     api: {
@@ -717,7 +717,7 @@ export default {
       keySafety: '建议在调用端后端保存 API Key，避免放入公开前端。跨域浏览器请求应不携带 Cookie；显示作品时使用隔离 iframe。'
     },
     disabled: {
-      title: '鹈鹕测智暂未开放',
+      title: '降智检测暂未开放',
       description: '管理员开启后，这里会展示各分组定时生成的作品。'
     },
     empty: {
