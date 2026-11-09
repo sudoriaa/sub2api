@@ -1048,6 +1048,38 @@ describe("admin SettingsView payment visible method controls", () => {
     wrapper.unmount();
   });
 
+  it("loads and saves the V1 slow-response threshold", async () => {
+    getSettings.mockResolvedValueOnce({ ...baseSettingsResponse, channel_monitor_enabled: true, channel_monitor_mode: "v1", channel_monitor_degraded_threshold_seconds: 15 });
+    const wrapper = mountView();
+    await flushPromises();
+    const featuresTab = wrapper.findAll("button").find((node) => node.text().includes("admin.settings.tabs.features"));
+    await featuresTab?.trigger("click");
+    const input = wrapper.get('[data-testid="settings-monitor-degraded-threshold"]');
+    expect((input.element as HTMLInputElement).value).toBe("15");
+    await input.setValue(10);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings.mock.calls[0]?.[0]?.channel_monitor_degraded_threshold_seconds).toBe(10);
+    wrapper.unmount();
+  });
+
+  it("defaults a missing V1 threshold to six seconds and rejects invalid values", async () => {
+    getSettings.mockResolvedValueOnce({ ...baseSettingsResponse, channel_monitor_enabled: true, channel_monitor_mode: "v1" });
+    const wrapper = mountView();
+    await flushPromises();
+    const featuresTab = wrapper.findAll("button").find((node) => node.text().includes("admin.settings.tabs.features"));
+    await featuresTab?.trigger("click");
+    const input = wrapper.get('[data-testid="settings-monitor-degraded-threshold"]');
+    expect((input.element as HTMLInputElement).value).toBe("6");
+    for (const value of [0, -1, 91, 1.5]) {
+      await input.setValue(value);
+      await wrapper.find("form").trigger("submit.prevent");
+      await flushPromises();
+      expect(updateSettings).not.toHaveBeenCalled();
+    }
+    wrapper.unmount();
+  });
+
   it("leaves the monitor mode alone unless it was changed here", async () => {
     getSettings.mockResolvedValueOnce({ ...baseSettingsResponse, channel_monitor_enabled: true, channel_monitor_mode: "v3" });
     const wrapper = mountView();

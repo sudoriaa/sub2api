@@ -80,6 +80,9 @@ export default {
           modeV3Hint: '按分类和组件展示状态条，状态来自本站真实用户请求的统计（和 V2 同一份数据，不额外发请求）；启用期间 V1 探测停止，V2 页面对用户隐藏。组件在「渠道监控」页面配置。',
           defaultInterval: '默认检测间隔（秒）',
           defaultIntervalHint: '仅 V1 模式使用：新建渠道监控时表单的默认值，可被单个渠道覆盖。范围 15 – 3600 秒。',
+          degradedThreshold: '慢响应变黄阈值（秒）',
+          degradedThresholdHint: '仅 V1 探活使用：成功请求的完整响应耗时达到此阈值时显示黄格。默认 6 秒，范围 1–90 秒；保存后从下一次检测生效，无需重启，不影响请求超时、失败判定或已有历史。',
+          invalidDegradedThreshold: '慢响应阈值必须为 1–90 秒之间的整数。',
           hideThroughput: '对用户隐藏吞吐速率（RPM / TPM）',
           hideThroughputHint:
             '开启后，用户端渠道监控页面与用户 API 不返回 RPM/TPM，避免用「速率 × 时间窗」反推集群规模。管理员仍可见完整指标；错误率、延迟、缓存率照常展示。',

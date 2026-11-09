@@ -233,6 +233,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyPrismBrowserEnabled,
 		SettingKeyChannelMonitorMode,
 		SettingKeyChannelMonitorDefaultIntervalSeconds,
+		SettingKeyChannelMonitorDegradedThresholdSeconds,
 		SettingKeyChannelMonitorHideThroughput,
 		SettingKeyChannelMonitorShowQuota,
 		SettingKeyChannelMonitorHideUserRanking,
@@ -366,14 +367,15 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		BalanceLowNotifyThreshold:           balanceLowNotifyThreshold,
 		BalanceLowNotifyRechargeURL:         settings[SettingKeyBalanceLowNotifyRechargeURL],
 
-		ChannelMonitorEnabled:                !isFalseSettingValue(settings[SettingKeyChannelMonitorEnabled]),
-		ExcelBPSEnabled:                      !isFalseSettingValue(settings[SettingKeyExcelBPSEnabled]),
-		PrismBrowserEnabled:                  settings[SettingKeyPrismBrowserEnabled] == "true",
-		ChannelMonitorMode:                   normalizeChannelMonitorMode(settings[SettingKeyChannelMonitorMode]),
-		ChannelMonitorDefaultIntervalSeconds: parseChannelMonitorInterval(settings[SettingKeyChannelMonitorDefaultIntervalSeconds]),
-		ChannelMonitorHideThroughput:         !isFalseSettingValue(settings[SettingKeyChannelMonitorHideThroughput]),
-		ChannelMonitorShowQuota:              settings[SettingKeyChannelMonitorShowQuota] == "true",
-		ChannelMonitorHideUserRanking:        isTrueSettingValue(settings[SettingKeyChannelMonitorHideUserRanking]),
+		ChannelMonitorEnabled:                  !isFalseSettingValue(settings[SettingKeyChannelMonitorEnabled]),
+		ExcelBPSEnabled:                        !isFalseSettingValue(settings[SettingKeyExcelBPSEnabled]),
+		PrismBrowserEnabled:                    settings[SettingKeyPrismBrowserEnabled] == "true",
+		ChannelMonitorMode:                     normalizeChannelMonitorMode(settings[SettingKeyChannelMonitorMode]),
+		ChannelMonitorDefaultIntervalSeconds:   parseChannelMonitorInterval(settings[SettingKeyChannelMonitorDefaultIntervalSeconds]),
+		ChannelMonitorDegradedThresholdSeconds: parseChannelMonitorDegradedThresholdSeconds(settings[SettingKeyChannelMonitorDegradedThresholdSeconds]),
+		ChannelMonitorHideThroughput:           !isFalseSettingValue(settings[SettingKeyChannelMonitorHideThroughput]),
+		ChannelMonitorShowQuota:                settings[SettingKeyChannelMonitorShowQuota] == "true",
+		ChannelMonitorHideUserRanking:          isTrueSettingValue(settings[SettingKeyChannelMonitorHideUserRanking]),
 
 		AvailableChannelsEnabled: settings[SettingKeyAvailableChannelsEnabled] == "true",
 		PelicanShowcaseEnabled:   settings[SettingKeyPelicanShowcaseEnabled] == "true",
@@ -450,9 +452,10 @@ func clampChannelMonitorInterval(v int) int {
 // ChannelMonitorRuntime is the lightweight view of the channel monitor feature
 // consumed by the runner, V2 aggregator, and user-facing handlers.
 type ChannelMonitorRuntime struct {
-	Enabled                bool
-	Mode                   string // ChannelMonitorModeV1, ChannelMonitorModeV2 or ChannelMonitorModeV3
-	DefaultIntervalSeconds int
+	Enabled                  bool
+	Mode                     string // ChannelMonitorModeV1, ChannelMonitorModeV2 or ChannelMonitorModeV3
+	DefaultIntervalSeconds   int
+	DegradedThresholdSeconds int
 	// HideThroughput: when true, user-facing V2 APIs omit RPM/TPM scale signals.
 	HideThroughput bool
 	// ShowQuota: when true, user-facing monitor views keep the quota/balance
@@ -490,35 +493,39 @@ func (r ChannelMonitorRuntime) V3Active() bool {
 func (s *SettingService) GetChannelMonitorRuntime(ctx context.Context) ChannelMonitorRuntime {
 	if s == nil || s.settingRepo == nil {
 		return ChannelMonitorRuntime{
-			Enabled:                true,
-			Mode:                   defaultChannelMonitorMode,
-			DefaultIntervalSeconds: channelMonitorIntervalFallback,
-			HideThroughput:         true,
+			Enabled:                  true,
+			Mode:                     defaultChannelMonitorMode,
+			DefaultIntervalSeconds:   channelMonitorIntervalFallback,
+			DegradedThresholdSeconds: DefaultChannelMonitorDegradedThresholdSeconds,
+			HideThroughput:           true,
 		}
 	}
 	vals, err := s.settingRepo.GetMultiple(ctx, []string{
 		SettingKeyChannelMonitorEnabled,
 		SettingKeyChannelMonitorMode,
 		SettingKeyChannelMonitorDefaultIntervalSeconds,
+		SettingKeyChannelMonitorDegradedThresholdSeconds,
 		SettingKeyChannelMonitorHideThroughput,
 		SettingKeyChannelMonitorShowQuota,
 		SettingKeyChannelMonitorHideUserRanking,
 	})
 	if err != nil {
 		return ChannelMonitorRuntime{
-			Enabled:                true,
-			Mode:                   defaultChannelMonitorMode,
-			DefaultIntervalSeconds: channelMonitorIntervalFallback,
-			HideThroughput:         true,
+			Enabled:                  true,
+			Mode:                     defaultChannelMonitorMode,
+			DefaultIntervalSeconds:   channelMonitorIntervalFallback,
+			DegradedThresholdSeconds: DefaultChannelMonitorDegradedThresholdSeconds,
+			HideThroughput:           true,
 		}
 	}
 	return ChannelMonitorRuntime{
-		Enabled:                !isFalseSettingValue(vals[SettingKeyChannelMonitorEnabled]),
-		Mode:                   normalizeChannelMonitorMode(vals[SettingKeyChannelMonitorMode]),
-		DefaultIntervalSeconds: parseChannelMonitorInterval(vals[SettingKeyChannelMonitorDefaultIntervalSeconds]),
-		HideThroughput:         !isFalseSettingValue(vals[SettingKeyChannelMonitorHideThroughput]),
-		ShowQuota:              vals[SettingKeyChannelMonitorShowQuota] == "true",
-		HideUserRanking:        isTrueSettingValue(vals[SettingKeyChannelMonitorHideUserRanking]),
+		Enabled:                  !isFalseSettingValue(vals[SettingKeyChannelMonitorEnabled]),
+		Mode:                     normalizeChannelMonitorMode(vals[SettingKeyChannelMonitorMode]),
+		DefaultIntervalSeconds:   parseChannelMonitorInterval(vals[SettingKeyChannelMonitorDefaultIntervalSeconds]),
+		DegradedThresholdSeconds: parseChannelMonitorDegradedThresholdSeconds(vals[SettingKeyChannelMonitorDegradedThresholdSeconds]),
+		HideThroughput:           !isFalseSettingValue(vals[SettingKeyChannelMonitorHideThroughput]),
+		ShowQuota:                vals[SettingKeyChannelMonitorShowQuota] == "true",
+		HideUserRanking:          isTrueSettingValue(vals[SettingKeyChannelMonitorHideUserRanking]),
 	}
 }
 
@@ -690,11 +697,12 @@ type PublicSettingsInjectionPayload struct {
 	// Feature flags — MUST match the opt-in/opt-out registry in
 	// frontend/src/utils/featureFlags.ts. Missing a field here is the bug
 	// that hid the "可用渠道" menu on page refresh.
-	ExcelBPSEnabled                      bool   `json:"excel_bps_enabled"`
-	PrismBrowserEnabled                  bool   `json:"prism_browser_enabled"`
-	ChannelMonitorEnabled                bool   `json:"channel_monitor_enabled"`
-	ChannelMonitorMode                   string `json:"channel_monitor_mode"`
-	ChannelMonitorDefaultIntervalSeconds int    `json:"channel_monitor_default_interval_seconds"`
+	ExcelBPSEnabled                        bool   `json:"excel_bps_enabled"`
+	PrismBrowserEnabled                    bool   `json:"prism_browser_enabled"`
+	ChannelMonitorEnabled                  bool   `json:"channel_monitor_enabled"`
+	ChannelMonitorMode                     string `json:"channel_monitor_mode"`
+	ChannelMonitorDefaultIntervalSeconds   int    `json:"channel_monitor_default_interval_seconds"`
+	ChannelMonitorDegradedThresholdSeconds int    `json:"channel_monitor_degraded_threshold_seconds"`
 	// ChannelMonitorHideThroughput is public so the user UI can hide RPM/TPM
 	// without waiting for API redaction alone (defense in depth).
 	ChannelMonitorHideThroughput bool `json:"channel_monitor_hide_throughput"`
@@ -789,29 +797,30 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		BalanceLowNotifyThreshold:           settings.BalanceLowNotifyThreshold,
 		BalanceLowNotifyRechargeURL:         settings.BalanceLowNotifyRechargeURL,
 
-		ChannelMonitorEnabled:                 settings.ChannelMonitorEnabled,
-		ExcelBPSEnabled:                       settings.ExcelBPSEnabled,
-		PrismBrowserEnabled:                   settings.PrismBrowserEnabled,
-		ChannelMonitorMode:                    settings.ChannelMonitorMode,
-		ChannelMonitorDefaultIntervalSeconds:  settings.ChannelMonitorDefaultIntervalSeconds,
-		ChannelMonitorHideThroughput:          settings.ChannelMonitorHideThroughput,
-		ChannelMonitorShowQuota:               settings.ChannelMonitorShowQuota,
-		ChannelMonitorHideUserRanking:         settings.ChannelMonitorHideUserRanking,
-		AvailableChannelsEnabled:              settings.AvailableChannelsEnabled,
-		PelicanShowcaseEnabled:                settings.PelicanShowcaseEnabled,
-		SubscriptionEnabled:                   settings.SubscriptionEnabled,
-		ModelPlazaEnabled:                     settings.ModelPlazaEnabled,
-		ModelPlazaRequireAuth:                 settings.ModelPlazaRequireAuth,
-		PluginManagementEnabled:               settings.PluginManagementEnabled,
-		SupportTicketEnabled:                  settings.SupportTicketEnabled,
-		LotteryEnabled:                        settings.LotteryEnabled,
-		AffiliateEnabled:                      settings.AffiliateEnabled,
-		RiskControlEnabled:                    settings.RiskControlEnabled,
-		AllowUserViewErrorRequests:            settings.AllowUserViewErrorRequests,
-		UsageShowLongContextBadge:             settings.UsageShowLongContextBadge,
-		UsageShowCacheRate:                    settings.UsageShowCacheRate,
-		UsageShowCacheRateToUsers:             settings.UsageShowCacheRateToUsers,
-		UsageShowUpstreamResponseModelToUsers: settings.UsageShowUpstreamResponseModelToUsers,
+		ChannelMonitorEnabled:                  settings.ChannelMonitorEnabled,
+		ExcelBPSEnabled:                        settings.ExcelBPSEnabled,
+		PrismBrowserEnabled:                    settings.PrismBrowserEnabled,
+		ChannelMonitorMode:                     settings.ChannelMonitorMode,
+		ChannelMonitorDefaultIntervalSeconds:   settings.ChannelMonitorDefaultIntervalSeconds,
+		ChannelMonitorDegradedThresholdSeconds: settings.ChannelMonitorDegradedThresholdSeconds,
+		ChannelMonitorHideThroughput:           settings.ChannelMonitorHideThroughput,
+		ChannelMonitorShowQuota:                settings.ChannelMonitorShowQuota,
+		ChannelMonitorHideUserRanking:          settings.ChannelMonitorHideUserRanking,
+		AvailableChannelsEnabled:               settings.AvailableChannelsEnabled,
+		PelicanShowcaseEnabled:                 settings.PelicanShowcaseEnabled,
+		SubscriptionEnabled:                    settings.SubscriptionEnabled,
+		ModelPlazaEnabled:                      settings.ModelPlazaEnabled,
+		ModelPlazaRequireAuth:                  settings.ModelPlazaRequireAuth,
+		PluginManagementEnabled:                settings.PluginManagementEnabled,
+		SupportTicketEnabled:                   settings.SupportTicketEnabled,
+		LotteryEnabled:                         settings.LotteryEnabled,
+		AffiliateEnabled:                       settings.AffiliateEnabled,
+		RiskControlEnabled:                     settings.RiskControlEnabled,
+		AllowUserViewErrorRequests:             settings.AllowUserViewErrorRequests,
+		UsageShowLongContextBadge:              settings.UsageShowLongContextBadge,
+		UsageShowCacheRate:                     settings.UsageShowCacheRate,
+		UsageShowCacheRateToUsers:              settings.UsageShowCacheRateToUsers,
+		UsageShowUpstreamResponseModelToUsers:  settings.UsageShowUpstreamResponseModelToUsers,
 	}, nil
 }
 

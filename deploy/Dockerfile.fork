@@ -1,0 +1,12 @@
+# Runtime dependencies and entrypoint stay identical to the deployed v2.20.1 image.
+ARG BASE_IMAGE=ghcr.io/ranxi2001/sub2api:2.20.1@sha256:5aac942e1ae62892167a15a04dbe291d8ec38afc004b719ae0baaffa4dbb76c5
+FROM ${BASE_IMAGE}
+
+ARG VERSION=2.20.1-custom
+ARG COMMIT=unknown
+LABEL org.opencontainers.image.source="https://github.com/sudoriaa/sub2api" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}"
+
+# Build a Linux/amd64 binary with the embedded frontend before building this image.
+COPY --chown=1000:1000 sub2api /app/sub2api

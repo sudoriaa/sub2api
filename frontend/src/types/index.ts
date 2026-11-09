@@ -276,6 +276,7 @@ export interface PublicSettings {
   /** Exclusive mode: v1 active probes or v2 passive aggregation. Default v2. */
   channel_monitor_mode?: 'v1' | 'v2' | 'v3'
   channel_monitor_default_interval_seconds: number
+  channel_monitor_degraded_threshold_seconds: number
   /** When true, user monitor hides RPM/TPM so scale cannot be reverse-estimated. */
   channel_monitor_hide_throughput?: boolean
   /** When true, user monitor shows account quota/balance snapshots (default off). */

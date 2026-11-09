@@ -703,12 +703,7 @@ func (s *ChannelMonitorService) runChecksConcurrent(ctx context.Context, m *Chan
 	pingMs := pingEndpointOrigin(ctx, m.Endpoint)
 
 	// 所有模型共用同一份 CheckOptions（来自监控的快照字段）。
-	opts := &CheckOptions{
-		APIMode:          m.APIMode,
-		ExtraHeaders:     m.ExtraHeaders,
-		BodyOverrideMode: m.BodyOverrideMode,
-		BodyOverride:     m.BodyOverride,
-	}
+	opts := s.buildCheckOptions(ctx, m)
 
 	var eg errgroup.Group
 	var mu sync.Mutex
@@ -725,6 +720,18 @@ func (s *ChannelMonitorService) runChecksConcurrent(ctx context.Context, m *Chan
 	}
 	_ = eg.Wait()
 	return results
+}
+
+// All models in a check share one settings snapshot; the next check reads updates without a restart.
+func (s *ChannelMonitorService) buildCheckOptions(ctx context.Context, m *ChannelMonitor) *CheckOptions {
+	seconds := normalizeChannelMonitorDegradedThresholdSeconds(s.probeRuntime(ctx).DegradedThresholdSeconds)
+	return &CheckOptions{
+		APIMode:           m.APIMode,
+		ExtraHeaders:      m.ExtraHeaders,
+		BodyOverrideMode:  m.BodyOverrideMode,
+		BodyOverride:      m.BodyOverride,
+		DegradedThreshold: time.Duration(seconds) * time.Second,
+	}
 }
 
 // ---------- 调度器协作 ----------

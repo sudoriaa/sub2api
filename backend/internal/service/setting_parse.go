@@ -203,14 +203,15 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyExcelBPSEnabled: "true",
 
 		// Channel monitor defaults (enabled, 60s)
-		SettingKeyChannelMonitorEnabled:                "true",
-		SettingKeyChannelMonitorMode:                   ChannelMonitorModeV1,
-		SettingKeyChannelMonitorDefaultIntervalSeconds: "60",
-		SettingKeyChannelMonitorHideThroughput:         "true",
-		SettingKeyChannelMonitorShowQuota:              "false",
-		SettingKeyChannelMonitorHideUserRanking:        "false",
-		SettingKeyPrismBrowserEnabled:                  "false",
-		SettingKeyPrismBrowserBaseURL:                  "http://127.0.0.1:8319/v1",
+		SettingKeyChannelMonitorEnabled:                  "true",
+		SettingKeyChannelMonitorMode:                     ChannelMonitorModeV1,
+		SettingKeyChannelMonitorDefaultIntervalSeconds:   "60",
+		SettingKeyChannelMonitorDegradedThresholdSeconds: "6",
+		SettingKeyChannelMonitorHideThroughput:           "true",
+		SettingKeyChannelMonitorShowQuota:                "false",
+		SettingKeyChannelMonitorHideUserRanking:          "false",
+		SettingKeyPrismBrowserEnabled:                    "false",
+		SettingKeyPrismBrowserBaseURL:                    "http://127.0.0.1:8319/v1",
 		// Generate a disabled-by-default bridge key so enabling the feature does
 		// not require a fragile hand-written secret during first-run setup.
 		SettingKeyPrismBrowserAPIKey: defaultPrismBrowserAPIKey(),
@@ -864,6 +865,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.ChannelMonitorDefaultIntervalSeconds = parseChannelMonitorInterval(
 		settings[SettingKeyChannelMonitorDefaultIntervalSeconds],
 	)
+	result.ChannelMonitorDegradedThresholdSeconds = parseChannelMonitorDegradedThresholdSeconds(settings[SettingKeyChannelMonitorDegradedThresholdSeconds])
 	// 默认隐藏吞吐（迁移 206 的隐私默认）：未配置时必须与 setting_public.go 的
 	// 公开读取路径给出同一个值，否则管理端看到“未隐藏”而用户端实际已隐藏。
 	result.ChannelMonitorHideThroughput = !isFalseSettingValue(settings[SettingKeyChannelMonitorHideThroughput])

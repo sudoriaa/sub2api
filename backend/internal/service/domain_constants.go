@@ -512,6 +512,9 @@ const (
 	// pre-filled when creating a new channel monitor from the admin UI. Range: [15, 3600].
 	SettingKeyChannelMonitorDefaultIntervalSeconds = "channel_monitor_default_interval_seconds"
 
+	// V1 successful probes taking at least this many seconds are marked degraded.
+	SettingKeyChannelMonitorDegradedThresholdSeconds = "channel_monitor_degraded_threshold_seconds"
+
 	// SettingKeyChannelMonitorHideThroughput hides RPM/TPM (and similar absolute
 	// throughput rates) from non-admin user-facing monitor APIs and UI, so users
 	// cannot reverse-estimate fleet volume from rates × window length.

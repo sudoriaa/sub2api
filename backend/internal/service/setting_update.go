@@ -486,6 +486,12 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	if v := clampChannelMonitorInterval(settings.ChannelMonitorDefaultIntervalSeconds); v > 0 {
 		updates[SettingKeyChannelMonitorDefaultIntervalSeconds] = strconv.Itoa(v)
 	}
+	if seconds := settings.ChannelMonitorDegradedThresholdSeconds; seconds != 0 {
+		if seconds < MinChannelMonitorDegradedThresholdSeconds || seconds > MaxChannelMonitorDegradedThresholdSeconds {
+			return nil, infraerrors.BadRequest("INVALID_CHANNEL_MONITOR_THRESHOLD", "channel monitor slow-response threshold must be between 1 and 90 seconds")
+		}
+		updates[SettingKeyChannelMonitorDegradedThresholdSeconds] = strconv.Itoa(seconds)
+	}
 	updates[SettingKeyChannelMonitorHideThroughput] = strconv.FormatBool(settings.ChannelMonitorHideThroughput)
 	updates[SettingKeyChannelMonitorShowQuota] = strconv.FormatBool(settings.ChannelMonitorShowQuota)
 	updates[SettingKeyChannelMonitorHideUserRanking] = strconv.FormatBool(settings.ChannelMonitorHideUserRanking)

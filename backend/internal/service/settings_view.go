@@ -209,16 +209,17 @@ type SystemSettings struct {
 	ExcelBPSEnabled bool `json:"excel_bps_enabled"`
 
 	// Channel Monitor feature
-	ChannelMonitorEnabled                bool   `json:"channel_monitor_enabled"`
-	ChannelMonitorMode                   string `json:"channel_monitor_mode"`
-	ChannelMonitorDefaultIntervalSeconds int    `json:"channel_monitor_default_interval_seconds"`
-	ChannelMonitorHideThroughput         bool   `json:"channel_monitor_hide_throughput"`
-	ChannelMonitorShowQuota              bool   `json:"channel_monitor_show_quota"`
-	ChannelMonitorHideUserRanking        bool   `json:"channel_monitor_hide_user_ranking"`
-	PrismBrowserEnabled                  bool   `json:"prism_browser_enabled"`
-	PrismBrowserBaseURL                  string `json:"prism_browser_base_url"`
-	PrismBrowserAPIKeyConfigured         bool   `json:"prism_browser_api_key_configured"`
-	PrismBrowserAPIKey                   string `json:"-"`
+	ChannelMonitorEnabled                  bool   `json:"channel_monitor_enabled"`
+	ChannelMonitorMode                     string `json:"channel_monitor_mode"`
+	ChannelMonitorDefaultIntervalSeconds   int    `json:"channel_monitor_default_interval_seconds"`
+	ChannelMonitorDegradedThresholdSeconds int    `json:"channel_monitor_degraded_threshold_seconds"`
+	ChannelMonitorHideThroughput           bool   `json:"channel_monitor_hide_throughput"`
+	ChannelMonitorShowQuota                bool   `json:"channel_monitor_show_quota"`
+	ChannelMonitorHideUserRanking          bool   `json:"channel_monitor_hide_user_ranking"`
+	PrismBrowserEnabled                    bool   `json:"prism_browser_enabled"`
+	PrismBrowserBaseURL                    string `json:"prism_browser_base_url"`
+	PrismBrowserAPIKeyConfigured           bool   `json:"prism_browser_api_key_configured"`
+	PrismBrowserAPIKey                     string `json:"-"`
 
 	// Grok model mapping policy (admin settings; empty mapping falls back to these).
 	GrokDefaultTextModel           string `json:"grok_default_text_model"`
@@ -450,12 +451,13 @@ type PublicSettings struct {
 	PrismBrowserEnabled bool `json:"prism_browser_enabled"`
 
 	// Channel Monitor feature
-	ChannelMonitorEnabled                bool   `json:"channel_monitor_enabled"`
-	ChannelMonitorMode                   string `json:"channel_monitor_mode"`
-	ChannelMonitorDefaultIntervalSeconds int    `json:"channel_monitor_default_interval_seconds"`
-	ChannelMonitorHideThroughput         bool   `json:"channel_monitor_hide_throughput"`
-	ChannelMonitorShowQuota              bool   `json:"channel_monitor_show_quota"`
-	ChannelMonitorHideUserRanking        bool   `json:"channel_monitor_hide_user_ranking"`
+	ChannelMonitorEnabled                  bool   `json:"channel_monitor_enabled"`
+	ChannelMonitorMode                     string `json:"channel_monitor_mode"`
+	ChannelMonitorDefaultIntervalSeconds   int    `json:"channel_monitor_default_interval_seconds"`
+	ChannelMonitorDegradedThresholdSeconds int    `json:"channel_monitor_degraded_threshold_seconds"`
+	ChannelMonitorHideThroughput           bool   `json:"channel_monitor_hide_throughput"`
+	ChannelMonitorShowQuota                bool   `json:"channel_monitor_show_quota"`
+	ChannelMonitorHideUserRanking          bool   `json:"channel_monitor_hide_user_ranking"`
 
 	// Grok model mapping policy (admin settings).
 	GrokDefaultTextModel           string `json:"grok_default_text_model"`

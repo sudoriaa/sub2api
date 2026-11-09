@@ -80,6 +80,9 @@ export default {
           modeV3Hint: 'Shows status bars by category and component, measured from real requests on this site (the same statistics as V2, no extra requests). V1 probes stop and the V2 page is hidden from users while V3 is active. Components are configured on the Channel Monitor page.',
           defaultInterval: 'Default check interval (seconds)',
           defaultIntervalHint: 'V1 only: default interval for new monitors (overridable per monitor). Range 15 – 3600 seconds.',
+          degradedThreshold: 'Slow-response yellow threshold (seconds)',
+          degradedThresholdHint: 'V1 probes only: successful requests turn yellow when the full response takes at least this long. Default 6 seconds; range 1–90. Applies to the next check without a restart; timeouts, failures and existing history are unchanged.',
+          invalidDegradedThreshold: 'The slow-response threshold must be an integer between 1 and 90 seconds.',
           hideThroughput: 'Hide throughput rates from users (RPM / TPM)',
           hideThroughputHint:
             'When on, the user Channel Monitor page and user APIs omit RPM and TPM so fleet volume cannot be reverse-estimated from rates × window. Admins still see full metrics. Error rates, latency, and cache rates remain visible.',

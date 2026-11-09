@@ -7700,6 +7700,27 @@
                 </p>
               </div>
 
+              <div v-if="form.channel_monitor_mode === 'v1'">
+                <label for="settings-monitor-degraded-threshold" class="input-label">
+                  {{ t('admin.settings.features.channelMonitor.degradedThreshold') }}
+                  <span class="text-red-500">*</span>
+                </label>
+                <input
+                  id="settings-monitor-degraded-threshold"
+                  v-model.number="form.channel_monitor_degraded_threshold_seconds"
+                  type="number"
+                  min="1"
+                  max="90"
+                  step="1"
+                  required
+                  class="input"
+                  data-testid="settings-monitor-degraded-threshold"
+                />
+                <p class="mt-1 text-xs text-gray-400">
+                  {{ t('admin.settings.features.channelMonitor.degradedThresholdHint') }}
+                </p>
+              </div>
+
               <div v-if="form.channel_monitor_mode === 'v2'" class="space-y-4">
                 <div class="flex items-start justify-between gap-4">
                   <div class="min-w-0">
@@ -10703,6 +10724,7 @@ const form = reactive<SettingsForm>({
   channel_monitor_enabled: true,
   channel_monitor_mode: 'v1' as 'v1' | 'v2' | 'v3',
   channel_monitor_default_interval_seconds: 60,
+  channel_monitor_degraded_threshold_seconds: 6,
   channel_monitor_hide_throughput: false,
   channel_monitor_show_quota: false,
   channel_monitor_hide_user_ranking: false,
@@ -11768,6 +11790,7 @@ async function loadSettings() {
         ? settings.channel_monitor_mode
         : "v1";
     loadedChannelMonitorMode = form.channel_monitor_mode;
+    form.channel_monitor_degraded_threshold_seconds = settings.channel_monitor_degraded_threshold_seconds ?? 6;
     form.channel_monitor_hide_throughput = Boolean(
       settings.channel_monitor_hide_throughput
     );
@@ -12010,6 +12033,11 @@ const siteBillingModeHint = computed(() =>
 async function saveSettings() {
   if (!Number.isFinite(form.balance_forecast_threshold_hours) || form.balance_forecast_threshold_hours <= 0 || form.balance_forecast_threshold_hours > 168 || !Number.isInteger(form.balance_forecast_max_notifications) || form.balance_forecast_max_notifications < 1 || form.balance_forecast_max_notifications > 10) {
     appStore.showError(t('admin.settings.balanceForecast.invalid'));
+    return;
+  }
+  const monitorThreshold = Number(form.channel_monitor_degraded_threshold_seconds);
+  if (!Number.isInteger(monitorThreshold) || monitorThreshold < 1 || monitorThreshold > 90) {
+    appStore.showError(t("admin.settings.features.channelMonitor.invalidDegradedThreshold"));
     return;
   }
   saving.value = true;
@@ -12541,6 +12569,7 @@ async function saveSettings() {
         form.channel_monitor_mode === loadedChannelMonitorMode ? undefined : form.channel_monitor_mode,
       channel_monitor_default_interval_seconds:
         Number(form.channel_monitor_default_interval_seconds) || 60,
+      channel_monitor_degraded_threshold_seconds: Number(form.channel_monitor_degraded_threshold_seconds),
       channel_monitor_hide_throughput: Boolean(form.channel_monitor_hide_throughput),
       channel_monitor_show_quota: Boolean(form.channel_monitor_show_quota),
       channel_monitor_hide_user_ranking: Boolean(form.channel_monitor_hide_user_ranking),

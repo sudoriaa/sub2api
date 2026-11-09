@@ -359,12 +359,13 @@ type UpdateSettingsRequest struct {
 	PaymentAlipayMobilePrecreateDeepLink *bool `json:"payment_alipay_mobile_precreate_deep_link"`
 
 	// Channel Monitor feature switch
-	ChannelMonitorEnabled                *bool   `json:"channel_monitor_enabled"`
-	ChannelMonitorMode                   *string `json:"channel_monitor_mode"`
-	ChannelMonitorDefaultIntervalSeconds *int    `json:"channel_monitor_default_interval_seconds"`
-	ChannelMonitorHideThroughput         *bool   `json:"channel_monitor_hide_throughput"`
-	ChannelMonitorShowQuota              *bool   `json:"channel_monitor_show_quota"`
-	ChannelMonitorHideUserRanking        *bool   `json:"channel_monitor_hide_user_ranking"`
+	ChannelMonitorEnabled                  *bool   `json:"channel_monitor_enabled"`
+	ChannelMonitorMode                     *string `json:"channel_monitor_mode"`
+	ChannelMonitorDefaultIntervalSeconds   *int    `json:"channel_monitor_default_interval_seconds"`
+	ChannelMonitorDegradedThresholdSeconds *int    `json:"channel_monitor_degraded_threshold_seconds"`
+	ChannelMonitorHideThroughput           *bool   `json:"channel_monitor_hide_throughput"`
+	ChannelMonitorShowQuota                *bool   `json:"channel_monitor_show_quota"`
+	ChannelMonitorHideUserRanking          *bool   `json:"channel_monitor_hide_user_ranking"`
 
 	// Grok model mapping policy
 	GrokDefaultTextModel           *string `json:"grok_default_text_model"`
@@ -557,6 +558,11 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	var req UpdateSettingsRequest
 	if err := c.ShouldBindBodyWith(&req, binding.JSON); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if seconds := req.ChannelMonitorDegradedThresholdSeconds; seconds != nil &&
+		(*seconds < service.MinChannelMonitorDegradedThresholdSeconds || *seconds > service.MaxChannelMonitorDegradedThresholdSeconds) {
+		response.BadRequest(c, "channel monitor slow-response threshold must be between 1 and 90 seconds")
 		return
 	}
 	if req.OpenAICodexTicketHarvestScope != nil && req.OpenAICodexTicketHarvestScope.Mode == "" {
@@ -2311,6 +2317,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.ChannelMonitorDefaultIntervalSeconds
 		}(),
+		ChannelMonitorDegradedThresholdSeconds: func() int {
+			if req.ChannelMonitorDegradedThresholdSeconds != nil {
+				return *req.ChannelMonitorDegradedThresholdSeconds
+			}
+			return previousSettings.ChannelMonitorDegradedThresholdSeconds
+		}(),
 		ChannelMonitorHideThroughput: func() bool {
 			if req.ChannelMonitorHideThroughput != nil {
 				return *req.ChannelMonitorHideThroughput
@@ -2862,13 +2874,14 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		PaymentAlipayForceQRCode:                               updatedPaymentCfg.AlipayForceQRCode,
 		PaymentAlipayMobilePrecreateDeepLink:                   updatedPaymentCfg.AlipayMobilePrecreateDeepLink,
 
-		ChannelMonitorEnabled:                updatedSettings.ChannelMonitorEnabled,
-		ExcelBPSEnabled:                      updatedSettings.ExcelBPSEnabled,
-		ChannelMonitorMode:                   updatedSettings.ChannelMonitorMode,
-		ChannelMonitorDefaultIntervalSeconds: updatedSettings.ChannelMonitorDefaultIntervalSeconds,
-		ChannelMonitorHideThroughput:         updatedSettings.ChannelMonitorHideThroughput,
-		ChannelMonitorShowQuota:              updatedSettings.ChannelMonitorShowQuota,
-		ChannelMonitorHideUserRanking:        updatedSettings.ChannelMonitorHideUserRanking,
+		ChannelMonitorEnabled:                  updatedSettings.ChannelMonitorEnabled,
+		ExcelBPSEnabled:                        updatedSettings.ExcelBPSEnabled,
+		ChannelMonitorMode:                     updatedSettings.ChannelMonitorMode,
+		ChannelMonitorDefaultIntervalSeconds:   updatedSettings.ChannelMonitorDefaultIntervalSeconds,
+		ChannelMonitorDegradedThresholdSeconds: updatedSettings.ChannelMonitorDegradedThresholdSeconds,
+		ChannelMonitorHideThroughput:           updatedSettings.ChannelMonitorHideThroughput,
+		ChannelMonitorShowQuota:                updatedSettings.ChannelMonitorShowQuota,
+		ChannelMonitorHideUserRanking:          updatedSettings.ChannelMonitorHideUserRanking,
 
 		GrokDefaultTextModel:           updatedSettings.GrokDefaultTextModel,
 		GrokCrossClientModelMapEnabled: updatedSettings.GrokCrossClientModelMapEnabled,
