@@ -1098,6 +1098,51 @@ describe('admin UsageTable latency TPS', () => {
   const barClasses = (wrapper: ReturnType<typeof mountLatency>, requestId: string) =>
     wrapper.find(`[data-row="${requestId}"] [data-testid="latency-bar"]`).classes()
 
+  it('shows user TPS as neutral text and keeps the bar above the TPS row', () => {
+    const wrapper = mountLatency([
+      { request_id: 'user-tps-fast', output_tokens: 801, duration_ms: 10_000, first_token_ms: 1_000 },
+      { request_id: 'user-tps-slow', output_tokens: 25, duration_ms: 17_000, first_token_ms: 12_000 },
+      { request_id: 'user-tps-mid', output_tokens: 150, duration_ms: 12_000, first_token_ms: 2_000 },
+    ], { cacheRateAudience: 'user', showTpsHealth: false })
+
+    expect(tpsCell(wrapper, 'user-tps-fast').text()).toBe('80.1 t/s')
+    for (const id of ['user-tps-fast', 'user-tps-slow', 'user-tps-mid']) {
+      const tps = tpsCell(wrapper, id)
+      expect(tps.classes()).toContain('text-black')
+      expect(tps.classes()).toContain('dark:text-gray-100')
+      expect(tps.classes().join(' ')).not.toMatch(/text-(emerald|amber|orange|red)-/)
+      expect(tps.attributes('title')).toBe('usage.latencyTpsHint')
+      const bar = wrapper.find(`[data-row="${id}"] [data-testid="latency-bar"]`)
+      expect(bar.classes()).toContain('row-span-2')
+      expect(bar.classes()).not.toContain('row-span-3')
+      expect(bar.classes()).not.toContain('row-span-4')
+      expect(bar.attributes('style')).toBeUndefined()
+      const label = wrapper.find(`[data-row="${id}"] .col-start-2.row-start-3`)
+      expect(label.classes()).toContain('text-black')
+    }
+    expect(barClasses(wrapper, 'user-tps-slow')).toEqual(
+      expect.arrayContaining(['from-amber-400', 'to-emerald-500']),
+    )
+    wrapper.unmount()
+  })
+
+  it('keeps a separate cache bar and neutral missing TPS when user TPS coloring is disabled', () => {
+    const previousSettings = appStoreMocks.cachedPublicSettings
+    appStoreMocks.cachedPublicSettings = { usage_show_cache_rate: true, usage_show_cache_rate_to_users: true }
+    const wrapper = mountLatency([
+      { request_id: 'user-tps-cache', input_tokens: 100, cache_read_tokens: 100, cache_creation_tokens: 0, output_tokens: 0, duration_ms: 1_000, first_token_ms: null },
+    ], { cacheRateAudience: 'user', showTpsHealth: false })
+
+    expect(tpsCell(wrapper, 'user-tps-cache').text()).toBe('-')
+    expect(tpsCell(wrapper, 'user-tps-cache').classes()).toContain('text-black')
+    expect(wrapper.get('[data-testid="latency-bar"]').classes()).toContain('row-span-2')
+    const cacheBar = wrapper.get('[data-testid="latency-cache-bar"]')
+    expect(cacheBar.classes()).toEqual(expect.arrayContaining(['row-start-4', 'bg-emerald-500']))
+    expect(wrapper.get('[data-testid="latency-cache-rate"]').classes()).toContain('text-emerald-600')
+    wrapper.unmount()
+    appStoreMocks.cachedPublicSettings = previousSettings
+  })
+
   it('shows average output throughput over the total duration for streaming rows', () => {
     const wrapper = mountLatency([
       { request_id: 'req-tps-stream', output_tokens: 872, duration_ms: 31_260, first_token_ms: 2_910 },

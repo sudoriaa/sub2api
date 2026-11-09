@@ -33,6 +33,8 @@ describe('server latency display without pre-forward wait disclosure', () => {
     }
     expect(adminPage).toContain('enable-timing-details')
     expect(userPage).not.toContain('enable-timing-details')
+    expect(userPage).toContain(':show-tps-health="false"')
+    expect(adminPage).not.toContain(':show-tps-health="false"')
   })
 
   for (const locale of ['en', 'zh'] as const) {

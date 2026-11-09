@@ -240,13 +240,13 @@
           </button>
         </template>
 
-        <!-- 状态列：首字/总耗时/TPS 用左侧色条表示健康度。缓存率百分数为绿色，色条延伸到这一行，但不改变上面三段的健康色。 -->
+        <!-- TPS health coloring can be omitted without changing the other latency indicators. -->
         <template #cell-latency="{ row }">
           <component :is="enableTimingDetails ? 'button' : 'div'" :type="enableTimingDetails ? 'button' : undefined" class="grid grid-cols-[0.25rem_max-content_max-content] items-baseline gap-x-2 gap-y-0.5 text-left text-xs" :class="enableTimingDetails ? 'hover:opacity-80 focus-visible:outline focus-visible:outline-primary-500' : ''" :aria-label="enableTimingDetails ? t('requestTiming.title') : undefined" @click="enableTimingDetails && (timingRecord = row)">
             <span
               data-testid="latency-bar"
               class="col-start-1 row-start-1 w-1 self-stretch rounded-full"
-              :class="[showCacheRate ? 'row-span-4' : 'row-span-3', latencyBarClasses(row)]"
+              :class="[!showTpsHealth ? 'row-span-2' : showCacheRate ? 'row-span-4' : 'row-span-3', latencyBarClasses(row)]"
               :style="cacheRateBarStyle(row)"
               aria-hidden="true"
             ></span>
@@ -259,16 +259,17 @@
             <span class="col-start-3 row-start-2 font-medium tabular-nums" :class="LATENCY_TEXT_CLASSES[durationSeverity(durationQueueInclusive(row) ?? 0)]" :title="row.queue_timing?.status === 'measured' ? t('usage.latencyDurationHint') : enableTimingDetails ? t('requestTiming.legacyTotal') : undefined">
               {{ formatDuration(durationQueueInclusive(row)) }}
             </span>
-            <span class="col-start-2 row-start-3 text-gray-400 dark:text-gray-500">{{ t('usage.latencyTps') }}</span>
+            <span class="col-start-2 row-start-3" :class="showTpsHealth ? 'text-gray-400 dark:text-gray-500' : 'text-black dark:text-gray-100'">{{ t('usage.latencyTps') }}</span>
             <span
               v-if="formatUsageOutputTps(row)"
               data-testid="latency-tps"
               class="col-start-3 row-start-3 font-medium tabular-nums"
-              :class="LATENCY_TEXT_CLASSES[tpsSeverity(usageOutputTps(row) ?? 0)]"
+              :class="showTpsHealth ? LATENCY_TEXT_CLASSES[tpsSeverity(usageOutputTps(row) ?? 0)] : 'text-black dark:text-gray-100'"
               :title="t('usage.latencyTpsHint')"
             >{{ formatUsageOutputTps(row) }}</span>
-            <span v-else data-testid="latency-tps" class="col-start-3 row-start-3 text-gray-400 dark:text-gray-500">-</span>
+            <span v-else data-testid="latency-tps" class="col-start-3 row-start-3" :class="showTpsHealth ? 'text-gray-400 dark:text-gray-500' : 'text-black dark:text-gray-100'">-</span>
             <template v-if="showCacheRate">
+              <span v-if="!showTpsHealth" data-testid="latency-cache-bar" class="col-start-1 row-start-4 w-1 self-stretch rounded-full bg-emerald-500" aria-hidden="true"></span>
               <span class="col-start-2 row-start-4 text-gray-400 dark:text-gray-500">{{ t('usage.latencyCacheRate') }}</span>
               <span
                 v-if="formatUsageCacheRate(row)"
@@ -631,6 +632,8 @@ interface Props {
   flat?: boolean
   /** 管理端默认可见；用户端还要打开「向用户展示」。 */
   cacheRateAudience?: 'admin' | 'user'
+  /** The user usage page displays TPS as neutral text, without its health bar. */
+  showTpsHealth?: boolean
 }
 
 const observerMode = inject(observerUsageContext, false)
@@ -646,7 +649,8 @@ const props = withDefaults(defineProps<Props>(), {
   enableTimingDetails: false,
   showUpstreamEndpoint: true,
   flat: false,
-  cacheRateAudience: 'admin'
+  cacheRateAudience: 'admin',
+  showTpsHealth: true
 })
 const emit = defineEmits<{
   userClick: [userID: number, email?: string]
@@ -823,6 +827,13 @@ const latencySeverities = (row: AdminUsageLog) => {
 // 延迟色条三段依次对应首字/总耗时/TPS（30%/50%/70% 分别落在三行内）；无首字或无 TPS 的段沿用总耗时档。
 const latencyBarClasses = (row: AdminUsageLog): string[] => {
   const severity = latencySeverities(row)
+  if (!props.showTpsHealth) {
+    return [
+      'bg-gradient-to-b',
+      LATENCY_BAR_FROM_CLASSES[severity.first],
+      LATENCY_BAR_TO_CLASSES[severity.duration],
+    ]
+  }
   return [
     'bg-gradient-to-b from-30% via-50% to-70%',
     LATENCY_BAR_FROM_CLASSES[severity.first],
@@ -833,7 +844,7 @@ const latencyBarClasses = (row: AdminUsageLog): string[] => {
 
 // 有缓存率时色条盖住四行：前三行仍用三行停点的相对位置，第四行固定绿色，不把缓存率算进健康度。
 const cacheRateBarStyle = (row: AdminUsageLog): Record<string, string> | undefined => {
-  if (!showCacheRate.value) return undefined
+  if (!showCacheRate.value || !props.showTpsHealth) return undefined
   const severity = latencySeverities(row)
   const first = LATENCY_BAR_COLORS[severity.first]
   const duration = LATENCY_BAR_COLORS[severity.duration]
