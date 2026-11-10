@@ -450,6 +450,7 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 	{
 		accounts.GET("/openai-request-timezones", h.Admin.Account.GetOpenAIRequestTimezones)
 		accounts.GET("", h.Admin.Account.List)
+		accounts.GET("/concurrency-summary", h.Admin.Account.GetConcurrencySummary)
 		accounts.GET("/management-capabilities", h.Admin.Setting.GetAccountManagementCapabilities)
 		accounts.GET("/upstream-billing-rates", h.Admin.Account.GetUpstreamBillingRates)
 		accounts.GET("/upstream-billing-probe/settings", h.Admin.Account.GetUpstreamBillingProbeSettings)
@@ -934,6 +935,8 @@ func registerScheduledTestRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	admin.GET("/priority-scheduling/config", h.Admin.Setting.GetPriorityScheduling)
 	admin.PUT("/priority-scheduling/config", h.Admin.Setting.SavePriorityScheduling)
 	admin.GET("/priority-scheduling/snapshot", h.Admin.Account.PrioritySchedulingSnapshot)
+	admin.GET("/priority-scheduling/analysis", h.Admin.Account.PrioritySchedulingAnalysis)
+	admin.GET("/priority-scheduling/models", h.Admin.Account.PrioritySchedulingModels)
 	admin.GET("/priority-scheduling/latency", h.Admin.Account.PrioritySchedulingLatency)
 	admin.POST("/priority-scheduling/recompute", h.Admin.Account.RecomputePriorityScheduling)
 	admin.GET("/priority-scheduling/sticky-bindings", h.Admin.Account.PrioritySchedulingStickyBindings)

@@ -23,7 +23,9 @@ describe('NewFeatureBadge', () => {
 
 
   it.each([
+    ['dashboard account concurrency', NEW_FEATURE_NOTICES.dashboardAccountConcurrency],
     ['key risk', NEW_FEATURE_NOTICES.keyRisk],
+    ['API key usage dates', NEW_FEATURE_NOTICES.apiKeyUsageDateRange],
     ['pricing transfer', NEW_FEATURE_NOTICES.channelPricingTransfer],
     ['stream event timing', NEW_FEATURE_NOTICES.streamFirstEventTiming],
     ['Mistral budget usage', NEW_FEATURE_NOTICES.mistralBudgetUsage],

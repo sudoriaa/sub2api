@@ -1,4 +1,15 @@
 export default {
+  analysis: {
+    notice: '状态仅反映历史指标，不代表当前可调度。实时并发和 HTTP 尝试未采集；得分采用中性并发估算，未应用实时错误惩罚。',
+    eligible: '历史指标达标',
+    insufficient: '历史数据不足',
+    degraded: '历史指标未达标',
+    recovery: '延迟恢复期',
+    notCollected: '未采集',
+    loadNotCollected: '实时并发未采集',
+    estimatedWeight: '估算分流权重',
+  },
+  filters: { updated: '已更新', choose: '请选择模型与分组', recomputeLatest: '重算最近实际选号', analysisHint: '分流权重不是全局概率。按所选模型、分组和时间窗口读取历史；实时容量与进程内尝试估计未采集，以未知显示。重算/清粘性单独针对最近实际选号，使用精确快照身份。', candidates: '候选评分', ungrouped: '未分组', catalogError: '模型或分组目录读取失败，请刷新重试' },
   reading: { configuration: '调度配置', diagnostics: '诊断详情', buckets: '当前页账号时间桶', pageSize: '每页数量', refreshing: '后台更新中，保留当前内容', stale: '更新失败，显示上次成功数据；将自动重试', stableOrder: '账号按 ID 稳定展示；新增追加、删除移除，不随实时指标重排。' },
   errorRate: "上游尝试错误率",
   error_rate_weight: "错误惩罚权重（%）",
@@ -13,7 +24,7 @@ export default {
   baseScore: "基础得分",
   errorNoSamples: "无尝试样本",
   errorLocalScope: "当前实例 · HTTP 尝试",
-  errorRateHint: "按账号、路由模型和端点统计近期尝试。得分 = 基础得分 × max(0.1, 1 − 权重/100 × 失败数/(成功数 + 失败数 + 先验))。先验缓和小样本，分钟桶到期清除旧错误，无样本中性。正权重替换原账号级错误惩罚；零权重沿用旧行为。每次真实 HTTP 重试单独统计，排除客户端取消、无效输入、鉴权、余额及配额拒绝。各实例独立，重启、淘汰和未接入协议可能显示不同证据或无样本。候选表错误列是刷新快照时读取的实时证据（标注读取时刻），选号候选、配置和负载仍取自快照时间；重算不能还原当时实际选路。",
+  errorRateHint: "按账号、路由模型和端点统计近期尝试。得分 = 基础得分 × max(0.1, 1 − 权重/100 × 失败数/(成功数 + 失败数 + 先验))。先验缓和小样本，分钟桶到期清除旧错误，无样本中性。正权重替换原账号级错误惩罚；零权重沿用旧行为。每次真实 HTTP 重试单独统计，排除客户端取消、无效输入、鉴权、余额及配额拒绝。各实例独立，重启、淘汰和未接入协议可能显示不同证据或无样本。历史候选分析不采集实时尝试，错误列显示“未采集”。最近实际选号快照才提供当前实例的尝试证据及读取时刻；重算不能还原当时实际选路。",
 
   experienceP90: '体验 P90',
   recovery_exploration_percent: "恢复探索（%）",
@@ -79,7 +90,7 @@ export default {
   tiers: { eligible: '体验达标', insufficient: '数据不足', degraded: '体验未达标' },
   reasons: { latency_recovery: '延迟惩罚到期，P90 仍超目标（恢复期仅兜底/探索）', quality_below_target: '质量低于目标', quality_unknown: '无有效质量结果', latency_above_target: '延迟超过目标', latency_insufficient: '延迟样本不足', busy: '并发偏高或有排队', load_unknown: '并发数据未知', cost_unknown: '成本未知', recent_errors: '近期错误偏多', historical_loss: '近期用户扣费低于理论成本', profit_insufficient: '利润样本不足' },
   latencyPanel: {
-    title: '延迟分析', refresh: '刷新', hint: '按下单次选号的候选池统计：P50/P90/P99 为首 token 毫秒，错误为上游错误事件去重数，慢请求为超过目标首字阈值的请求数。汇总取优先调度历史窗口，热力格取上方所选窗口、每 5 分钟一格。',
+    title: '延迟分析', refresh: '刷新', hint: '按所选模型、分组与时间窗口统计。汇总与每 5 分钟时间桶使用同一截止时间；首字延迟单位为毫秒，错误为去重上游错误事件，慢请求为超过已保存阈值的样本。',
     account: '账号', samples: '样本', p50: 'P50 首字', p90: 'P90 首字', p99: 'P99 首字', errors: '错误', slow: '慢请求', errorRate: '错误率',
     empty: '暂无延迟样本', error: '读取延迟分析失败，请重试。', window: '时间窗口'
   },
