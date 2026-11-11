@@ -7,6 +7,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/Wei-Shaw/sub2api/internal/requestcapture"
+	"github.com/Wei-Shaw/sub2api/internal/usagecontent"
 	coderws "github.com/coder/websocket"
 )
 
@@ -120,6 +121,7 @@ func readOpenAIWSClientMessageWithTimeoutStart(
 				capture := requestcapture.FromContext(controlCtx)
 				capture.SetProtocol("websocket")
 				capture.ClientFrame(result.payload)
+				usagecontent.ConnectionFromContext(controlCtx).InitialInput(result.payload)
 			}
 			return result.messageType, result.payload, result.err
 		case <-timeoutStart:

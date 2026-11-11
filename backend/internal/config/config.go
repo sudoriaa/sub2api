@@ -1151,6 +1151,7 @@ func (c CodexWSAnchorConfig) Validate() error {
 }
 
 type GatewayConfig struct {
+	UsageContent    UsageContentConfig   `mapstructure:"usage_content"`
 	UpstreamRouting upstreamroute.Config `mapstructure:"upstream_routing"`
 	// PrismBrowser is the server-managed browser-session adapter for prism.openai.com.
 	// Account settings only select this route; cookies, sandbox state and the adapter
@@ -2837,6 +2838,9 @@ func setDefaults() {
 	viper.SetDefault("gateway.antigravity_fallback_cooldown_minutes", 1)
 	viper.SetDefault("gateway.antigravity_extra_retries", 10)
 	viper.SetDefault("gateway.max_body_size", int64(256*1024*1024))
+	viper.SetDefault("gateway.usage_content.enabled", true)
+	viper.SetDefault("gateway.usage_content.max_body_bytes", 2*1024*1024)
+	viper.SetDefault("gateway.usage_content.max_storage_mib", 1024)
 	viper.SetDefault("gateway.text_max_body_size", int64(32*1024*1024))
 	viper.SetDefault("gateway.upstream_response_read_max_bytes", DefaultUpstreamResponseReadMaxBytes)
 	viper.SetDefault("gateway.models_list_read_max_bytes", DefaultModelsListReadMaxBytes)
@@ -3676,6 +3680,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.MaxBodySize <= 0 {
 		return fmt.Errorf("gateway.max_body_size must be positive")
+	}
+	if c.Gateway.UsageContent.MaxBodyBytes < 0 || c.Gateway.UsageContent.MaxBodyBytes > 8*1024*1024 {
+		return fmt.Errorf("gateway.usage_content.max_body_bytes must be between 0 (default) and 8388608")
+	}
+	if c.Gateway.UsageContent.MaxStorageMiB < 0 || c.Gateway.UsageContent.MaxStorageMiB > 102400 {
+		return fmt.Errorf("gateway.usage_content.max_storage_mib must be between 0 (default) and 102400")
 	}
 	if c.Gateway.TextMaxBodySize <= 0 || c.Gateway.TextMaxBodySize > c.Gateway.MaxBodySize {
 		return fmt.Errorf("gateway.text_max_body_size must be positive and no greater than gateway.max_body_size")

@@ -1,5 +1,8 @@
 <template>
   <div :class="flat ? '' : 'card overflow-hidden'">
+	<div v-if="enableContentDetails && !observerMode" class="border-b border-gray-200 px-4 py-2 text-xs text-gray-500 dark:border-dark-700 dark:text-gray-400">
+	  {{ t('usageContent.retentionNote') }}
+	</div>
     <div v-if="enableTimingDetails && noticeUserId != null && !observerMode" class="flex items-center gap-2 border-b border-gray-200 px-4 py-2 text-xs text-gray-500 dark:border-dark-700 dark:text-gray-400">
       <span>{{ t('requestTiming.contentTitle') }}</span>
       <NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.streamFirstEventTiming" :user-id="noticeUserId" />
@@ -286,6 +289,12 @@
           <span class="text-sm text-gray-600 dark:text-gray-400">{{ formatDateTime(value) }}</span>
         </template>
 
+        <template #cell-content="{ row }">
+          <button v-if="enableContentDetails && !observerMode" type="button" data-testid="usage-content-button"
+            class="whitespace-nowrap rounded px-2 py-1 text-xs font-medium text-primary-600 hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/30"
+            @click="contentRecord = row">{{ t('usageContent.view') }}</button>
+        </template>
+
         <template #cell-request_id="{ row }">
           <div v-if="row.request_id" class="flex max-w-[160px] items-center gap-1.5">
             <span class="truncate font-mono text-xs text-gray-500 dark:text-gray-400" :title="row.request_id">
@@ -547,6 +556,7 @@
       </div>
   </UsageDetailPopover>
   <UsageTimingDialog :record="timingRecord" :notice-user-id="noticeUserId" @close="timingRecord = null" />
+  <UsageContentDialog v-if="enableContentDetails && !observerMode" :record="contentRecord" @close="contentRecord = null" />
 </template>
 
 <script setup lang="ts">
@@ -555,6 +565,7 @@ import { useWindowSize } from '@vueuse/core'
 import UsageDetailPopover from './UsageDetailPopover.vue'
 import UsageApiKeyName from './UsageApiKeyName.vue'
 import UsageTimingDialog from './UsageTimingDialog.vue'
+import UsageContentDialog from './UsageContentDialog.vue'
 import NewFeatureBadge from '@/components/common/NewFeatureBadge.vue'
 import { NEW_FEATURE_NOTICES } from '@/constants/newFeatureNotices'
 import { observerUsageContext } from './observerUsageContext'
@@ -625,6 +636,8 @@ interface Props {
   defaultSortOrder?: 'asc' | 'desc'
   showAccountBilling?: boolean
   enableTimingDetails?: boolean
+	/** Admin only. User and observer tables must never load dialogue bodies. */
+	enableContentDetails?: boolean
   /** Current admin ID for the shared feature notice; omitted on user/observer pages. */
   noticeUserId?: number | null
   showUpstreamEndpoint?: boolean
@@ -639,6 +652,7 @@ interface Props {
 const observerMode = inject(observerUsageContext, false)
 
 const timingRecord = ref<AdminUsageLog | null>(null)
+const contentRecord = ref<AdminUsageLog | null>(null)
 
 const props = withDefaults(defineProps<Props>(), {
   loading: false,
@@ -647,6 +661,7 @@ const props = withDefaults(defineProps<Props>(), {
   defaultSortOrder: 'asc',
   showAccountBilling: true,
   enableTimingDetails: false,
+  enableContentDetails: false,
   showUpstreamEndpoint: true,
   flat: false,
   cacheRateAudience: 'admin',

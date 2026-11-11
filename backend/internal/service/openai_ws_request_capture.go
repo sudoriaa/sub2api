@@ -9,6 +9,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/Wei-Shaw/sub2api/internal/requestcapture"
 	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
+	"github.com/Wei-Shaw/sub2api/internal/usagecontent"
 	"github.com/Wei-Shaw/sub2api/internal/util/transportdiag"
 	coderws "github.com/coder/websocket"
 )
@@ -42,9 +43,11 @@ func (c *captureUpstreamFrameConn) ReadFrame(ctx context.Context) (coderws.Messa
 
 // WriteCapturedWSClient observes successfully delivered downstream frames.
 func WriteCapturedWSClient(ctx context.Context, conn *coderws.Conn, t coderws.MessageType, payload []byte) error {
+	contentSession := usagecontent.FromContext(ctx)
 	err := conn.Write(ctx, t, payload)
 	capture := requestcapture.FromContext(ctx)
 	if err == nil {
+		contentSession.OutputFrame(payload)
 		capture.Frame("client_response", 0, payload)
 	} else {
 		capture.MarkPartial("client_write_failed")

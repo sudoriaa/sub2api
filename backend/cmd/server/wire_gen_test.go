@@ -56,6 +56,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // balance forecast owner
 		nil, // default/full runtime configuration
 		nil, // request capture manager
+		nil, // 24-hour usage content manager
 		nil, // entClient
 		nil, // redis
 		&service.OpsMetricsCollector{},

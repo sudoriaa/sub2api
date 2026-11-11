@@ -172,6 +172,7 @@ docs/*
 !docs/modeltrace-tests.md
 !docs/cyber-session-blocking.md
 !docs/request-capture.md
+!docs/usage-content-24h.md
 !docs/gateway-transport-diagnostics.md
 !docs/chat-responses-bridge-recovery.md
 !docs/codex-credits.md

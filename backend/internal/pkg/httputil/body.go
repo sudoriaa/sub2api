@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/Wei-Shaw/sub2api/internal/requestcapture"
+	"github.com/Wei-Shaw/sub2api/internal/usagecontent"
 	"io"
 	"net/http"
 	"strings"
@@ -78,6 +79,7 @@ func ReadRequestBodyWithPreallocLimit(req *http.Request, maxDecodedBytes int64) 
 func readRequestBodyWithPrealloc(req *http.Request, maxDecodedBytes int64, strict bool) (result []byte, resultErr error) {
 	defer func() {
 		if resultErr == nil && req != nil {
+			usagecontent.FromContext(req.Context()).Input(result, req.Header.Get("Content-Type"))
 			requestcapture.FromContext(req.Context()).ClientRequest(result, req.Header.Get("Content-Type"), req.Header)
 		}
 	}()

@@ -1040,6 +1040,7 @@ func ProvideAPIKeyServiceWithGroupProtection(
 var ProviderSet = wire.NewSet(
 	ProvideAccountPerformanceService,
 	ProvideRequestCaptureManager,
+	ProvideUsageContentManager,
 	// Core services
 	ProvideAuthService,
 	NewPasskeyService,

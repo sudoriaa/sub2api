@@ -119,6 +119,8 @@ var auditSensitiveReads = map[string]string{
 	"GET /api/v1/admin/risk-control/evidence/config":                          "admin.cyber_evidence.config.read",
 	"GET /api/v1/admin/settings/ip-audit":                                     "admin.ip_audit.read",
 	"GET /api/v1/admin/request-captures/:task/requests/:record":               "admin.request_capture.read",
+	"GET /api/v1/admin/usage/:id/content":                                     "admin.usage.content.read",
+	"GET /api/v1/admin/usage/errors/:id/content":                              "admin.usage.error_content.read",
 	"GET /api/v1/admin/request-captures/:task/requests/:record/content/:part": "admin.request_capture.content",
 	"GET /api/v1/admin/request-captures/:task/export":                         "admin.request_capture.export",
 	"GET /api/v1/admin/request-captures/:task/requests/:record/export":        "admin.request_capture.export",

@@ -16,12 +16,15 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/Wei-Shaw/sub2api/internal/usagecontent"
 
 	"github.com/gin-gonic/gin"
 )
 
 // UsageHandler handles admin usage-related requests
 type UsageHandler struct {
+	Contents                  *usagecontent.Manager
+	contentOps                *service.OpsService
 	trafficUninitializedDrops atomic.Int64
 	trafficDelivery           *service.TrafficDelivery
 	usageService              *service.UsageService

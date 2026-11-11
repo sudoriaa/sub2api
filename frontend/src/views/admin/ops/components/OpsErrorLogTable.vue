@@ -154,6 +154,9 @@
         </template>
 
         <template #cell-actions="{ row }">
+          <button v-if="enableContentDetails" type="button" data-testid="error-content-button"
+            class="mr-1 whitespace-nowrap rounded px-2 py-1 text-xs font-medium text-primary-600 hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/30"
+            @click.stop="contentRecord = row">{{ t('usageContent.view') }}</button>
           <button
             type="button"
             class="rounded p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-600 dark:hover:text-primary-400"
@@ -179,10 +182,13 @@
       />
     </div>
   </div>
+  <UsageContentDialog v-if="enableContentDetails" :record="contentRecord" error-record @close="contentRecord = null" />
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import UsageContentDialog from '@/components/admin/usage/UsageContentDialog.vue'
+import type { UsageContentRecord } from '@/api/admin/usageContent'
+import { computed, ref } from 'vue'
 import { balanceErrorSource } from '../utils/balanceError'
 import { useI18n } from 'vue-i18n'
 import DataTable from '@/components/common/DataTable.vue'
@@ -290,6 +296,7 @@ function getTypeBadge(log: OpsErrorLog): { label: string; className: string } {
 }
 
 interface Props {
+  enableContentDetails?: boolean
   rows: OpsErrorLog[]
   total: number
   loading: boolean
@@ -315,6 +322,7 @@ interface Emits {
 }
 
 const props = defineProps<Props>()
+const contentRecord = ref<UsageContentRecord | null>(null)
 const emit = defineEmits<Emits>()
 
 function onSort(key: string, order: 'asc' | 'desc') {

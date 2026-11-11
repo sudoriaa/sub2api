@@ -21,6 +21,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/serverless"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/Wei-Shaw/sub2api/internal/usagecontent"
 
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
@@ -90,6 +91,7 @@ func provideCleanup(
 	balanceNotify *service.BalanceNotifyService,
 	cfg *config.Config,
 	requestCaptures *requestcapture.Manager,
+	usageContents *usagecontent.Manager,
 	entClient *ent.Client,
 	rdb *redis.Client,
 	opsMetricsCollector *service.OpsMetricsCollector,
@@ -537,6 +539,11 @@ func provideCleanup(
 		}
 
 		runParallel(parallelSteps)
+		// Billing workers have now joined. Drain content after their session
+		// bindings, and before the SQL connection is closed.
+		if err := usageContents.Close(ctx); err != nil {
+			log.Printf("[Cleanup] UsageContent drain timed out")
+		}
 		runSequential(infraSteps)
 
 		// Check if context timed out

@@ -51,6 +51,7 @@ func TestPgDumperHoldsMigrationLockThroughReaderClose(t *testing.T) {
 		commandCreated = true
 		require.Equal(t, "pg_dump", name)
 		require.Contains(t, args, "--clean")
+		require.Contains(t, args, "--exclude-table-data=public.usage_request_contents")
 		require.NoError(t, mock.ExpectationsWereMet(), "migration lock must be acquired before pg_dump is created")
 		return exec.CommandContext(ctx, "sh", "-c", "printf backup-data")
 	})

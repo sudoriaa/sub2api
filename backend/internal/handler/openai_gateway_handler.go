@@ -27,6 +27,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/Wei-Shaw/sub2api/internal/usagecontent"
 
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
@@ -525,6 +526,7 @@ func usageRecordContext(parent context.Context, base context.Context) context.Co
 	if requestID, _ := parent.Value(ctxkey.RequestID).(string); strings.TrimSpace(requestID) != "" {
 		base = context.WithValue(base, ctxkey.RequestID, strings.TrimSpace(requestID))
 	}
+	base = usagecontent.WithSession(base, usagecontent.FromContext(parent))
 	return requesttiming.With(base, requesttiming.From(parent))
 }
 
@@ -535,14 +537,20 @@ func wrapUsageRecordTaskContext(parent context.Context, task service.UsageRecord
 	if task == nil {
 		return nil, func() {}
 	}
+	if parent != nil {
+		parent = usagecontent.WithSession(parent, usagecontent.FromContext(parent))
+	}
 	done := func() {}
+	contentDone := usagecontent.FromContext(parent).Acquire()
 	if parent != nil {
 		done = service.InflightReservationFromContext(parent).Acquire()
 	}
+	var once sync.Once
+	release := func() { once.Do(func() { done(); contentDone() }) }
 	return func(ctx context.Context) {
-		defer done()
+		defer release()
 		task(usageRecordContext(parent, ctx))
-	}, done
+	}, release
 }
 
 func openAICompatibleRequestPlatform(ctx context.Context, apiKey *service.APIKey) string {
@@ -3590,6 +3598,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				return nil
 			},
 			BeforeRequestWithClientPayload: func(turn int, payload, clientPayload []byte, originalModel string) error {
+				usagecontent.ConnectionFromContext(ctx).BeginTurn(turn, clientPayload)
 				c.Set(securityAuditWSTurnContextKey, turn)
 				service.BeginOpsStreamTurn(c, turn)
 				// 连接级 cyber session gate 也在 BeforeRequest 先执行，使 native 与
@@ -3759,6 +3768,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				return checkSimpleModeTurnBilling()
 			},
 			AfterTurn: func(turn int, result *service.OpenAIForwardResult, turnErr error) {
+				contentSession, contentTurnDone := usagecontent.ConnectionFromContext(ctx).TakeTurn(turn)
+				contentCtx := usagecontent.WithSession(ctx, contentSession)
+				defer func() { contentSession.Finish(101, turnErr != nil); contentTurnDone() }()
 				turnStart := getTurnStart(turn)
 				// Each ingress samples its own forward boundary. Callback cleanup is
 				// never queue time. Preserve the current frame across account failover.
@@ -3803,7 +3815,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if cyberTurnContext.identity.Metadata.Status != "" {
 					cyberIdentityOverride = &cyberTurnContext.identity
 				}
-				h.recordCyberPolicyIfMarkedWithIdentity(c, apiKey, account, subscription, turnRequestedModel, turnErr != nil, cyberBlockBody, turnUsageFields, requestPayloadHash, cyberIdentityOverride)
+				h.recordCyberPolicyIfMarkedWithIdentity(c, apiKey, account, subscription, turnRequestedModel, turnErr != nil, cyberBlockBody, turnUsageFields, requestPayloadHash, cyberIdentityOverride, contentCtx)
 				cyberBlockedThisConn, cyberBlockPendingAfterFailover = advanceOpenAIWSCyberBlockState(
 					cyberBlockedThisConn,
 					cyberBlockPendingAfterFailover,
@@ -3854,7 +3866,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if turnErr == nil && !cyberBlocked {
 					h.gatewayService.ObserveGroupAntiDistillationUsage(ctx, turnBillingAPIKey, account, result, turnStart, cyberBlockBody)
 				}
-				h.submitOpenAIUsageRecordTask(ctx, result, func(taskCtx context.Context) {
+				h.submitOpenAIUsageRecordTask(contentCtx, result, func(taskCtx context.Context) {
 					if err := h.gatewayService.RecordUsage(taskCtx, &service.OpenAIRecordUsageInput{
 						Result:             result,
 						APIKey:             turnBillingAPIKey,
@@ -5279,7 +5291,7 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 	h.recordCyberPolicyIfMarkedWithIdentity(c, apiKey, account, subscription, model, forwardErrored, cyberBlockBody, channelFields, requestPayloadHash, nil)
 }
 
-func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarkedWithIdentity(c *gin.Context, apiKey *service.APIKey, account *service.Account, subscription *service.UserSubscription, model string, forwardErrored bool, cyberBlockBody []byte, channelFields service.ChannelUsageFields, requestPayloadHash string, identityOverride *service.CyberSessionIdentityResolution) {
+func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarkedWithIdentity(c *gin.Context, apiKey *service.APIKey, account *service.Account, subscription *service.UserSubscription, model string, forwardErrored bool, cyberBlockBody []byte, channelFields service.ChannelUsageFields, requestPayloadHash string, identityOverride *service.CyberSessionIdentityResolution, contentContexts ...context.Context) {
 	mark := service.GetOpsCyberPolicy(c)
 	if mark == nil {
 		return
@@ -5390,9 +5402,22 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarkedWithIdentity(c *gin.Cont
 	if cmSvc != nil && cmSvc.CyberEvidence() != nil {
 		evidence = cmSvc.CyberEvidence().PrepareWithSession(cyberBlockBody, mark.Message, sessionID, mark.UpstreamStatus)
 	}
+	contentParent := context.Background()
+	if c.Request != nil {
+		contentParent = c.Request.Context()
+	}
+	if len(contentContexts) > 0 && contentContexts[0] != nil {
+		contentParent = contentContexts[0]
+	}
+	contentSession := usagecontent.FromContext(contentParent)
+	contentDone := func() {}
+	if gwSvc != nil && forwardErrored {
+		contentDone = contentSession.Acquire()
+	}
 	go func() {
 		defer evidence.Release()
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer contentDone()
+		ctx, cancel := context.WithTimeout(usagecontent.WithSession(context.Background(), contentSession), 30*time.Second)
 		defer cancel()
 		if cmSvc != nil {
 			cmSvc.RecordCyberPolicyEvent(ctx, service.CyberPolicyRecordInput{

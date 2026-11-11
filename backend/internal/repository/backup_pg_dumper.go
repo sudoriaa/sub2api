@@ -59,6 +59,9 @@ func (d *PgDumper) Dump(ctx context.Context) (io.ReadCloser, error) {
 		"--no-acl",
 		"--clean",
 		"--if-exists",
+		// Conversation payloads are a 24-hour cache, not business data. Keeping
+		// them in long-lived backups would silently defeat the retention policy.
+		"--exclude-table-data=public.usage_request_contents",
 	}
 
 	commandContext := d.commandContext
