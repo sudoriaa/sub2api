@@ -103,6 +103,7 @@ type PelicanGroupTestPlanInput struct {
 	ParallelCount     int                             `json:"parallel_count"`
 	QuestionGenerator *PelicanQuestionGeneratorConfig `json:"question_generator"`
 	FallbackPrompts   []string                        `json:"fallback_prompts"`
+	PromptMode        string                          `json:"prompt_mode,omitempty"`
 }
 
 type PelicanGroupTestRepository interface {
@@ -252,7 +253,7 @@ func (s *PelicanGroupTestService) planFromInput(ctx context.Context, input Pelic
 	if plan.ModelID == "" || len(plan.ModelID) > 100 {
 		return nil, infraerrors.BadRequest("INVALID_PELICAN_GROUP_TEST", "model is required (maximum 100 bytes)")
 	}
-	prompt, fallbacks, err := normalizePelicanGroupFallbacks(input.Prompt, input.FallbackPrompts)
+	prompt, fallbacks, err := normalizePelicanGroupModeFallbacks(input.PromptMode, input.Prompt, input.FallbackPrompts)
 	if err != nil {
 		return nil, err
 	}
@@ -281,9 +282,12 @@ func (s *PelicanGroupTestService) planFromInput(ctx context.Context, input Pelic
 	}
 	plan.NextRunAt = &next
 	plan.Enabled = input.Enabled
-	plan.PelicanConfig = &PelicanTestConfig{QuestionKind: "pelican", Prompt: prompt, ReasoningEffort: effort, ParallelCount: parallel, ModelID: plan.ModelID}
+	plan.PelicanConfig = &PelicanTestConfig{QuestionKind: "pelican", PromptMode: input.PromptMode, Prompt: prompt, ReasoningEffort: effort, ParallelCount: parallel, ModelID: plan.ModelID}
 	plan.PelicanConfig.QuestionGenerator = generator
 	plan.PelicanConfig.FallbackPrompts = fallbacks
+	if err := validatePelicanPromptMode(plan.PelicanConfig); err != nil {
+		return nil, infraerrors.BadRequest("INVALID_PELICAN_GROUP_TEST", err.Error())
+	}
 	return plan, nil
 }
 
@@ -308,6 +312,7 @@ func (s *PelicanGroupTestService) RunNow(ctx context.Context, id int64) error {
 	if !claimed {
 		return ErrPelicanGroupTestPlanRunning
 	}
+	plan.PelicanConfig = freezePelicanQuestion(plan.PelicanConfig, "manual-group:"+now.UTC().Format(time.RFC3339Nano), nil)
 	s.runs.Add(1)
 	go func() {
 		defer s.runs.Done()
@@ -355,6 +360,10 @@ func (s *PelicanGroupTestService) runScheduled(ctx context.Context, plan *Pelica
 		logger.LegacyPrintf("service.pelican_group_test", "plan=%d invalid schedule: %v", plan.ID, err)
 		return
 	}
+	roundTime := now
+	if plan.NextRunAt != nil {
+		roundTime = *plan.NextRunAt
+	}
 	// The persisted lease keeps ticks and server replicas from running a plan twice and
 	// expires by itself after a crash.
 	until := now.Add(pelicanGroupTestLease).Truncate(time.Microsecond)
@@ -365,6 +374,7 @@ func (s *PelicanGroupTestService) runScheduled(ctx context.Context, plan *Pelica
 	if err != nil || !claimed {
 		return
 	}
+	plan.PelicanConfig = freezePelicanQuestion(plan.PelicanConfig, "scheduled:"+roundTime.UTC().Format(time.RFC3339Nano), nil)
 	s.execute(plan, until)
 }
 

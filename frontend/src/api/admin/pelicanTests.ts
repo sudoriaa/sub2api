@@ -4,7 +4,7 @@
  */
 
 import { apiClient } from '../client'
-import type { PaginatedResponse } from '@/types'
+import type { PaginatedResponse, PelicanQuestion } from '@/types'
 
 export interface PelicanQuestionGeneratorConfig {
   api_key_id: number
@@ -21,6 +21,9 @@ export interface PelicanQuestionGeneratorKey {
 }
 
 export interface PelicanGroupTestConfig {
+  prompt_mode?: 'custom' | 'random'
+  pelican_question?: PelicanQuestion
+  actual_prompt?: string
   question_kind?: string
   prompt: string
   reasoning_effort: string
@@ -88,6 +91,7 @@ export interface PelicanGroupTestPlan {
 
 /** What an admin edits. The group of an existing plan cannot change. */
 export interface PelicanGroupTestPlanInput {
+  prompt_mode?: 'custom' | 'random'
   group_id: number
   model_id: string
   cron_expression: string

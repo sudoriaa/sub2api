@@ -149,7 +149,46 @@ func TestPelicanQuestionGeneratorOnlyFallsBackOnGenerationFailure(t *testing.T) 
 	legacy := &PelicanTestConfig{Prompt: "fixed"}
 	result, err = svc.prepareGroupQuestion(context.Background(), legacy)
 	require.NoError(t, err)
-	require.Equal(t, legacy, result)
+	require.Equal(t, "fixed", result.Prompt)
+	require.Equal(t, intelligenceTestPrompt(result), result.ActualPrompt)
+	require.Empty(t, legacy.ActualPrompt, "execution evidence must not mutate the saved plan")
+}
+
+func TestPelicanQuestionGeneratorPreservesFrozenRandomBank(t *testing.T) {
+	calls := 0
+	svc := &PelicanGroupTestService{questionGenerator: &pelicanQuestionGenerator{request: func(context.Context, *PelicanQuestionGeneratorConfig) (string, error) {
+		calls++
+		return "must not replace the shared bank question", nil
+	}}}
+	config := questionConfig()
+	config.PromptMode = PelicanPromptModeRandom
+	frozen := freezePelicanQuestion(config, "scheduled:2026-11-12T00:00:00Z", nil)
+	for i := 0; i < 3; i++ {
+		result, err := svc.prepareGroupQuestion(context.Background(), frozen)
+		require.NoError(t, err)
+		require.Equal(t, frozen.Prompt, result.Prompt)
+		require.Equal(t, frozen.PelicanQuestion, result.PelicanQuestion)
+		require.Equal(t, frozen.ActualPrompt, result.ActualPrompt)
+	}
+	require.Zero(t, calls)
+	require.Equal(t, "legacy", config.Prompt)
+}
+
+func TestPelicanQuestionGeneratorRefreshesActualPromptEvidence(t *testing.T) {
+	for _, fallback := range []bool{false, true} {
+		svc := &PelicanGroupTestService{questionGenerator: &pelicanQuestionGenerator{request: func(context.Context, *PelicanQuestionGeneratorConfig) (string, error) {
+			if fallback {
+				return "", errors.New("synthetic upstream unavailable")
+			}
+			return "generated scene", nil
+		}}}
+		frozen := freezePelicanQuestion(questionConfig(), "manual-group:fixture", nil)
+		result, err := svc.prepareGroupQuestion(context.Background(), frozen)
+		require.NoError(t, err)
+		require.Equal(t, intelligenceTestPrompt(result), result.ActualPrompt)
+		require.NotEqual(t, frozen.ActualPrompt, result.ActualPrompt)
+		require.Nil(t, result.PelicanQuestion, "custom questions must not carry a built-in rubric")
+	}
 }
 
 func TestPelicanQuestionGeneratorKeepsQuestionAcrossAccountRetries(t *testing.T) {

@@ -105,6 +105,15 @@ func pelicanQuestionKeyOption(key *APIKey) PelicanQuestionGeneratorKey {
 		Available: key.IsActive() && !key.IsExpired() && !key.IsQuotaExhausted()}
 }
 
+// Random-bank mode has its own frozen question and needs no custom fallback.
+// Keep supplied fallback pools available when switching back to custom mode.
+func normalizePelicanGroupModeFallbacks(mode, prompt string, inputs []string) (string, []string, error) {
+	if mode == PelicanPromptModeRandom && len(inputs) == 0 && strings.TrimSpace(prompt) == "" {
+		return "", nil, nil
+	}
+	return normalizePelicanGroupFallbacks(prompt, inputs)
+}
+
 func normalizePelicanGroupFallbacks(legacy string, inputs []string) (string, []string, error) {
 	bad := func() (string, []string, error) {
 		return "", nil, infraerrors.BadRequest("INVALID_PELICAN_GROUP_TEST", "provide 1–20 nonempty fallback questions (32000 bytes each, 128000 bytes total)")
@@ -166,6 +175,13 @@ func (s *PelicanGroupTestService) prepareGroupQuestion(ctx context.Context, orig
 		return nil, nil
 	}
 	resolved := *original
+	// The built-in bank is frozen once per round before parallel samples start.
+	// Do not overwrite its prompt/rubric with the per-sample custom generator.
+	if original.PromptMode == PelicanPromptModeRandom {
+		return &resolved, nil
+	}
+	resolved.PelicanQuestion = nil
+	defer func() { resolved.ActualPrompt = intelligenceTestPrompt(&resolved) }()
 	resolved.FallbackPrompts = append([]string(nil), original.FallbackPrompts...)
 	resolved.QuestionSource, resolved.QuestionGenerationError, resolved.QuestionGenerationMS = "", "", 0
 	if original.QuestionGenerator != nil {

@@ -21,8 +21,12 @@ type PelicanTestConfig struct {
 	BPSRecoveryPending bool           `json:"-"`
 	Quality            *QualityPolicy `json:"quality,omitempty"`
 	QuestionKind       string         `json:"question_kind,omitempty"`
-	TestChannel        string         `json:"test_channel,omitempty"`
-	Prompt             string         `json:"prompt"`
+	// Empty mode preserves the exact prompt of legacy/custom plans.
+	PromptMode      string           `json:"prompt_mode,omitempty"`
+	PelicanQuestion *PelicanQuestion `json:"pelican_question,omitempty"`
+	ActualPrompt    string           `json:"actual_prompt,omitempty"`
+	TestChannel     string           `json:"test_channel,omitempty"`
+	Prompt          string           `json:"prompt"`
 	// Group-test questions retain only a site key ID, never its credential.
 	QuestionGenerator *PelicanQuestionGeneratorConfig `json:"question_generator,omitempty"`
 	FallbackPrompts   []string                        `json:"fallback_prompts,omitempty"`

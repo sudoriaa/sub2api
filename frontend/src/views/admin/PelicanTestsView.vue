@@ -246,7 +246,7 @@
           <input id="pelican-test-model" v-model.trim="editor.form.model_id" maxlength="100" class="input w-full" :placeholder="t('pelicanTests.editor.modelPlaceholder')" data-testid="pelican-test-model" />
           <p class="field-hint">{{ t('pelicanTests.editor.modelHint') }}</p>
         </div>
-        <div>
+        <div v-if="editor.form.prompt_mode !== 'random'">
           <div class="enable-row mb-0">
             <span><strong>{{ t('pelicanTests.editor.generatorEnabled') }}</strong><small>{{ t('pelicanTests.editor.generatorHint') }}</small></span>
             <Toggle v-model="editor.generatorEnabled" data-testid="pelican-generator-enabled" />
@@ -277,15 +277,18 @@
         </div>
         <div>
           <div class="flex items-center justify-between">
-            <label class="field-label mt-0" for="pelican-test-prompt">{{ t('pelicanTests.editor.prompt') }}</label>
-            <button type="button" class="link-button text-xs" @click="editor.form.fallback_prompts = [PELICAN_PROMPT]">{{ t('pelicanTests.editor.resetPrompt') }}</button>
+            <label v-if="editor.form.prompt_mode !== 'random'" class="field-label mt-0" for="pelican-test-prompt">{{ t('pelicanTests.editor.prompt') }}</label>
+            <button v-if="editor.form.prompt_mode !== 'random'" type="button" class="link-button text-xs" @click="editor.form.fallback_prompts = [PELICAN_PROMPT]">{{ t('pelicanTests.editor.resetPrompt') }}</button>
           </div>
+          <PelicanPromptMode v-model="editor.form.prompt_mode" />
+          <template v-if="editor.form.prompt_mode !== 'random'">
           <div v-for="(_, index) in editor.form.fallback_prompts" :key="index" class="mb-2 flex items-start gap-2">
             <textarea :id="index === 0 ? 'pelican-test-prompt' : `pelican-test-prompt-${index}`" v-model="editor.form.fallback_prompts[index]" rows="3" maxlength="32000" class="input min-w-0 flex-1" :aria-label="t('pelicanTests.editor.fallbackQuestion', { number: index + 1 })" :data-testid="index === 0 ? 'pelican-test-prompt' : `pelican-test-prompt-${index}`" />
             <button type="button" class="btn btn-secondary px-2" :disabled="editor.form.fallback_prompts.length <= 1" :aria-label="t('pelicanTests.editor.removeFallback', { number: index + 1 })" :data-testid="`pelican-fallback-remove-${index}`" @click="editor.form.fallback_prompts.splice(index, 1)"><Icon name="trash" size="sm" /></button>
           </div>
           <button type="button" class="link-button text-xs" :disabled="editor.form.fallback_prompts.length >= 20" data-testid="pelican-fallback-add" @click="editor.form.fallback_prompts.push('')">{{ t('pelicanTests.editor.addFallback') }}</button>
-          <p class="field-hint">{{ t('pelicanTests.editor.promptHint') }}</p>
+          </template>
+          <p v-if="editor.form.prompt_mode !== 'random'" class="field-hint">{{ t('pelicanTests.editor.promptHint') }}</p>
         </div>
         <div class="grid gap-4 sm:grid-cols-2">
           <div>
@@ -332,11 +335,12 @@
       @close="preview = null"
     >
       <div v-if="preview" class="flex min-h-0 flex-1 flex-col gap-3" data-testid="pelican-result-preview">
-        <details v-if="preview.result.pelican_config?.prompt" class="shrink-0 rounded-lg border border-gray-200 p-3 text-sm dark:border-dark-700" data-testid="pelican-actual-question">
+        <details v-if="preview.result.pelican_config?.prompt && !preview.result.pelican_config.pelican_question" class="shrink-0 rounded-lg border border-gray-200 p-3 text-sm dark:border-dark-700" data-testid="pelican-actual-question">
           <summary class="cursor-pointer">{{ t('pelicanTests.history.actualQuestion') }} · {{ t(`pelicanTests.history.source.${preview.result.pelican_config.question_source || 'fixed'}`) }}</summary>
           <p class="mt-2 max-h-32 overflow-auto whitespace-pre-wrap">{{ preview.result.pelican_config.prompt }}</p>
           <p v-if="preview.result.pelican_config.question_generation_error" class="mt-2 text-xs text-amber-600 dark:text-amber-400">{{ t('pelicanTests.history.generatorFailed') }}: {{ preview.result.pelican_config.question_generation_error }}</p>
         </details>
+        <PelicanQuestionSnapshot :question="preview.result.pelican_config?.pelican_question" :actual-prompt="preview.result.pelican_config?.actual_prompt || preview.result.pelican_config?.prompt" />
         <div class="min-h-0 flex-1 overflow-hidden rounded-xl border border-gray-200 bg-gray-100 dark:border-dark-700 dark:bg-dark-900">
           <PelicanArtworkPreview v-if="preview.status === 'ready'" :html="preview.html" :title="previewTitle" />
           <div v-else class="flex h-full items-center justify-center p-6 text-sm text-gray-500">
@@ -373,6 +377,8 @@
 </template>
 
 <script setup lang="ts">
+import PelicanPromptMode from '@/components/admin/account/PelicanPromptMode.vue'
+import PelicanQuestionSnapshot from '@/components/admin/account/PelicanQuestionSnapshot.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -663,6 +669,7 @@ function inputFrom(plan: PelicanGroupTestPlan): EditorInput {
     cron_expression: plan.cron_expression,
     enabled: plan.enabled,
     prompt: plan.pelican_config?.prompt || PELICAN_PROMPT,
+    prompt_mode: plan.pelican_config?.prompt_mode || 'custom',
     reasoning_effort: plan.pelican_config?.reasoning_effort || 'medium',
     parallel_count: plan.pelican_config?.parallel_count || 1,
     fallback_prompts: plan.pelican_config?.fallback_prompts?.length ? [...plan.pelican_config.fallback_prompts] : [plan.pelican_config?.prompt || PELICAN_PROMPT],
@@ -673,7 +680,7 @@ function inputFrom(plan: PelicanGroupTestPlan): EditorInput {
 function openEditor(plan?: PelicanGroupTestPlan) {
   const form: EditorInput = plan
     ? inputFrom(plan)
-    : { group_id: 0, model_id: '', cron_expression: SCHEDULES[1].cron, enabled: true, prompt: PELICAN_PROMPT, reasoning_effort: 'medium', parallel_count: 1, fallback_prompts: [PELICAN_PROMPT], question_generator: null }
+    : { group_id: 0, model_id: '', cron_expression: SCHEDULES[1].cron, enabled: true, prompt: PELICAN_PROMPT, prompt_mode: 'custom', reasoning_effort: 'medium', parallel_count: 1, fallback_prompts: [PELICAN_PROMPT], question_generator: null }
   const schedule = SCHEDULES.some((preset) => preset.cron === form.cron_expression) ? form.cron_expression : 'custom'
   editor.value = { id: plan?.id ?? null, groupName: plan?.group_name ?? '', form, schedule, generatorEnabled: plan ? !!form.question_generator : true,
     generator: form.question_generator ? { ...form.question_generator } : { api_key_id: 0, model_id: '', prompt: PELICAN_QUESTION_GENERATOR_PROMPT } }
@@ -690,21 +697,22 @@ async function savePlan() {
     fail(null, t('pelicanTests.editor.required'))
     return
   }
+  const random = form.prompt_mode === 'random'
   const fallbacks = form.fallback_prompts.map(prompt => prompt.trim())
   const bytes = (text: string) => new TextEncoder().encode(text).length
-  if (!fallbacks.length || fallbacks.length > 20 || fallbacks.some(prompt => !prompt || bytes(prompt) > 32000) || fallbacks.reduce((total, prompt) => total + bytes(prompt), 0) > 128000) {
+  if (!random && (!fallbacks.length || fallbacks.length > 20 || fallbacks.some(prompt => !prompt || bytes(prompt) > 32000) || fallbacks.reduce((total, prompt) => total + bytes(prompt), 0) > 128000)) {
     fail(null, t('pelicanTests.editor.fallbackRequired'))
     return
   }
   const generator = current.generator
-  if (current.generatorEnabled && (!generator.api_key_id || !generator.model_id.trim() || !generator.prompt.trim() || bytes(generator.model_id) > 100 || bytes(generator.prompt) > 32000)) {
+  if (!random && current.generatorEnabled && (!generator.api_key_id || !generator.model_id.trim() || !generator.prompt.trim() || bytes(generator.model_id) > 100 || bytes(generator.prompt) > 32000)) {
     fail(null, t('pelicanTests.editor.generatorRequired'))
     return
   }
   savingPlan.value = true
   try {
-    const input = { ...form, prompt: fallbacks[0], fallback_prompts: fallbacks, parallel_count: Number(form.parallel_count) || 1,
-      question_generator: current.generatorEnabled ? { api_key_id: Number(generator.api_key_id), model_id: generator.model_id.trim(), prompt: generator.prompt.trim() } : null }
+    const input = { ...form, prompt: random ? '' : fallbacks[0], fallback_prompts: random ? undefined : fallbacks, parallel_count: Number(form.parallel_count) || 1,
+      question_generator: !random && current.generatorEnabled ? { api_key_id: Number(generator.api_key_id), model_id: generator.model_id.trim(), prompt: generator.prompt.trim() } : null }
     if (current.id) {
       await pelicanTestsAPI.updatePlan(current.id, input)
       succeed(t('pelicanTests.editor.updated'))
@@ -776,7 +784,7 @@ async function openPreview(result: PelicanGroupTestResult) {
     const full = await pelicanTestsAPI.getResult(result.id)
     if (preview.value?.result.id !== result.id) return
     const html = extractPelicanHtml(full.response_text || '')
-    preview.value = { result, html, status: html ? 'ready' : 'invalid' }
+    preview.value = { result: full, html, status: html ? 'ready' : 'invalid' }
   } catch {
     if (preview.value?.result.id === result.id) preview.value = { result, html: '', status: 'error' }
   }
