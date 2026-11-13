@@ -45,6 +45,7 @@ type openAIAgentRecoveryState struct {
 }
 
 type openAIAgentRecoveryRequest struct {
+	omittedHistory      bool // explicit Beta sanitization; preserve the resulting input and prohibit replay
 	disableOwnerBinding bool
 	previousResponseID  string
 	inputDigest         [32]byte
@@ -146,7 +147,7 @@ func (r *openAIAgentRecoveryRequest) ownerBindingRequired() bool {
 }
 
 func (r *openAIAgentRecoveryRequest) preservesHistory() bool {
-	return r != nil && r.disableOwnerBinding && len(r.items) > 0
+	return r != nil && (r.omittedHistory || (r.disableOwnerBinding && len(r.items) > 0))
 }
 
 func openAIAgentRecoveryPreservesHistory(ctx context.Context) bool {
@@ -363,6 +364,9 @@ func (s *OpenAIGatewayService) prepareOpenAIAgentRecoveryAttempt(ctx context.Con
 		return noop, openAIAgentRecoveryError("wire_changed")
 	}
 	if request.preservesHistory() && openAIAgentRecoveryInputDigest(body) != request.inputDigest {
+		if request.omittedHistory {
+			logger.FromContext(ctx).Warn("openai.encrypted_history_409_refused", zap.String("stage", "input_integrity"))
+		}
 		return noop, openAIAgentRecoveryError("wire_changed")
 	}
 	if request.previousResponseID != "" && gjson.GetBytes(body, "previous_response_id").String() != request.previousResponseID {
