@@ -153,15 +153,16 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 	// released for a failover selection). The Key and user members are never
 	// released or re-queued between attempts.
 	type liveJointLease struct {
-		leaseID   string
-		accountID int64
+		leaseID        string
+		accountID      int64
+		ownerAccountID int64 // last transferred identity, retained after account-only release
 	}
 	var joint liveJointLease
 	releaseJoint := func() {
 		if joint.leaseID == "" {
 			return
 		}
-		s.releaseLiveLease(joint.accountID, identity.UserID, identity.APIKeyID, joint.leaseID)
+		s.releaseLiveLease(joint.ownerAccountID, identity.UserID, identity.APIKeyID, joint.leaseID)
 		joint = liveJointLease{}
 	}
 
@@ -195,6 +196,13 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 		}
 
 		account := selection.Account
+		if identity.BeforeGeneration != nil {
+			if err := identity.BeforeGeneration(ctx, account); err != nil {
+				selection.ReleaseFunc()
+				releaseJoint()
+				return nil, err
+			}
+		}
 		if joint.leaseID == "" {
 			leaseID := generateRequestID()
 			acquireCtx, cancelAcquire := context.WithTimeout(ctx, liveRedisOperationTimeout)
@@ -228,7 +236,7 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 				}
 				return nil, ErrLiveConcurrencyFull
 			}
-			joint = liveJointLease{leaseID: leaseID, accountID: account.ID}
+			joint = liveJointLease{leaseID: leaseID, accountID: account.ID, ownerAccountID: account.ID}
 		} else {
 			// Retried SDP: keep the joint Key/user members and migrate only the
 			// account member to the newly selected account. The new ordinary
@@ -259,6 +267,7 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 				return nil, ErrLiveConcurrencyFull
 			}
 			joint.accountID = account.ID
+			joint.ownerAccountID = account.ID
 		}
 		leaseID := joint.leaseID
 
@@ -1084,6 +1093,7 @@ func (s *OpenAIGatewayService) finalizeLiveCall(record *LiveCallRecord) {
 	// 这是该会话唯一一次落库机会（MarkLiveCallClosed 已标记 first），失败即永久
 	// 丢失，因此走带日志与同步兜底的 writeUsageLogBestEffort（issue #3656）。
 	writeUsageLogBestEffort(context.Background(), s.usageLogRepo, &UsageLog{
+		Platform:         PlatformOpenAI, // Live admission only accepts OpenAI OAuth accounts.
 		UserID:           record.UserID,
 		APIKeyID:         record.APIKeyID,
 		AccountID:        record.AccountID,

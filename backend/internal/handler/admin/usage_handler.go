@@ -115,6 +115,11 @@ func (h *UsageHandler) List(c *gin.Context) {
 		groupID = id
 	}
 
+	platform, err := parseUsagePlatform(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	model := c.Query("model")
 	requestID := strings.TrimSpace(c.Query("request_id"))
 	billingMode := strings.TrimSpace(c.Query("billing_mode"))
@@ -198,6 +203,7 @@ func (h *UsageHandler) List(c *gin.Context) {
 		SortOrder: c.DefaultQuery("sort_order", "desc"),
 	}
 	filters := usagestats.UsageLogFilters{
+		Platform:              platform,
 		UserID:                userID,
 		APIKeyID:              apiKeyID,
 		AccountID:             accountID,
@@ -267,6 +273,11 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		groupID = id
 	}
 
+	platform, err := parseUsagePlatform(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	model := c.Query("model")
 	billingMode := strings.TrimSpace(c.Query("billing_mode"))
 
@@ -358,6 +369,7 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 
 	// Build filters and call GetStatsWithFilters
 	filters := usagestats.UsageLogFilters{
+		Platform:              platform,
 		UserID:                userID,
 		APIKeyID:              apiKeyID,
 		AccountID:             accountID,

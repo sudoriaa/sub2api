@@ -44,16 +44,14 @@ func (c *captureUpstreamFrameConn) ReadFrame(ctx context.Context) (coderws.Messa
 // WriteCapturedWSClient observes successfully delivered downstream frames.
 func WriteCapturedWSClient(ctx context.Context, conn *coderws.Conn, t coderws.MessageType, payload []byte) error {
 	contentSession := usagecontent.FromContext(ctx)
-	err := conn.Write(ctx, t, payload)
 	capture := requestcapture.FromContext(ctx)
-	if err == nil {
-		contentSession.OutputFrame(payload)
-		capture.Frame("client_response", 0, payload)
-	} else {
-		capture.MarkPartial("client_write_failed")
-		capture.MarkError("client_write_failed")
-	}
-	return err
+	return capture.DeliverClientFrame(payload, func() error {
+		err := conn.Write(ctx, t, payload)
+		if err == nil {
+			contentSession.OutputFrame(payload)
+		}
+		return err
+	})
 }
 func captureWSLeaseWrite(ctx context.Context, account int64, headers http.Header, value any, write func() error) error {
 	capture := requestcapture.FromContext(ctx)

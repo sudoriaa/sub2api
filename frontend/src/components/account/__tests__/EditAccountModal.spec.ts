@@ -7,7 +7,7 @@ import type { InternalAxiosRequestConfig } from 'axios'
 import { getAutoConfig } from '@/api/admin/autoConfig'
 import { defaultExcelBPSDefaults } from '@/utils/excelBPSDefaults'
 vi.mock('@/api/admin/autoConfig', () => ({ getAutoConfig: vi.fn() }))
-beforeEach(() => { vi.mocked(getAutoConfig).mockResolvedValue({ excel_bps: defaultExcelBPSDefaults() } as Awaited<ReturnType<typeof getAutoConfig>>) })
+beforeEach(() => { setActivePinia(createPinia()); vi.mocked(getAutoConfig).mockResolvedValue({ excel_bps: defaultExcelBPSDefaults() } as Awaited<ReturnType<typeof getAutoConfig>>) })
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
@@ -48,6 +48,10 @@ vi.mock('@/stores/auth', () => ({
 
 vi.mock('@/api/admin', () => ({
   adminAPI: {
+    proxies: {
+      getProxyAccounts: vi.fn().mockResolvedValue([]),
+      testProxy: vi.fn().mockResolvedValue({ success: true, message: 'Connected', latency_ms: 12 }),
+    },
     accounts: {
       getManagementCapabilities: vi.fn().mockResolvedValue({ web_search_enabled: false, account_quota_notify_enabled: false }),
       update: updateAccountMock,
@@ -79,6 +83,8 @@ vi.mock('vue-i18n', async () => {
 })
 
 import EditAccountModal from '../EditAccountModal.vue'
+import BPSProxyRoutingSettings from '../BPSProxyRoutingSettings.vue'
+import { adminAPI } from '@/api/admin'
 
 const BaseDialogStub = defineComponent({
   name: 'BaseDialog',
@@ -349,6 +355,230 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
 }
 
 describe('EditAccountModal', () => {
+  it.each(['agentIdentity', 'personalAccessToken', 'personal_access_token'])('keeps unsupported %s identities on the existing single proxy selector', async authMode => {
+    const account = { ...buildOpenAIOAuthParentAccount(), proxy_id: 45, credentials: { auth_mode: authMode } }
+    const wrapper = mountModal(account)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="openai-proxy-settings"]').exists()).toBe(false)
+    expect(wrapper.getComponent({ name: 'ProxySelector' }).props('modelValue')).toBe(45)
+  })
+  it('prefers explicit unified single mode over legacy BPS request mode and retains the group for switching back', async () => {
+    const account = { ...buildOpenAIOAuthParentAccount(), proxy_id: 45, concurrency: 6, extra: { openai_excel_bps: true, openai_proxy_mode: 'single', openai_proxy_ids: [22], openai_excel_bps_proxy_mode: 'request', openai_excel_bps_proxy_ids: [11] } }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await wrapper.setProps({ proxies: [{ id: 22, name: 'New group', status: 'active', expires_at: null }] })
+    await flushPromises()
+    expect(wrapper.get<HTMLInputElement>('[data-testid="openai-proxy-mode-single"]').element.checked).toBe(true)
+    expect(wrapper.getComponent({ name: 'ProxySelector' }).props('modelValue')).toBe(45)
+    expect(wrapper.find('[data-testid="bps-proxy-trigger"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="openai-proxy-mode-request"]').setValue()
+    await wrapper.get('[data-testid="bps-proxy-trigger"]').trigger('click')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="bps-proxy-22"]').element.checked).toBe(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).toHaveBeenLastCalledWith(7, expect.objectContaining({ proxy_id: 45, concurrency: 6, extra: expect.objectContaining({ openai_proxy_mode: 'request', openai_proxy_ids: [22] }) }))
+  })
+  it('forwards catalog states and retry, then replaces the account selection while the modal stays open', async () => {
+    const first = { ...buildOpenAIOAuthParentAccount(), proxy_id: 45, concurrency: 6, extra: { openai_excel_bps: true, openai_excel_bps_proxy_mode: 'request', openai_excel_bps_proxy_ids: [11] } }
+    const second = { ...buildOpenAIOAuthParentAccount(), id: 8, name: 'Second account', proxy_id: 46, concurrency: 9, extra: { openai_excel_bps: true, openai_excel_bps_proxy_mode: 'request', openai_excel_bps_proxy_ids: [22] } }
+    const proxies = [
+      { id: 11, name: 'First proxy', protocol: 'http', host: 'first.example.test', port: 8080, status: 'active', expires_at: null },
+      { id: 22, name: 'Second proxy', protocol: 'http', host: 'second.example.test', port: 8080, status: 'active', expires_at: null },
+    ] as any[]
+    const usage = [
+      { id: 7, name: 'First account', platform: 'openai', type: 'oauth' },
+      { id: 8, name: 'Second account', platform: 'openai', type: 'oauth' },
+    ]
+    vi.mocked(adminAPI.proxies.getProxyAccounts).mockResolvedValueOnce(usage as any).mockResolvedValueOnce(usage as any)
+    updateAccountMock.mockReset().mockResolvedValue(second)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(first)
+    await wrapper.setProps({ proxies })
+    await flushPromises()
+    const picker = wrapper.getComponent(BPSProxyRoutingSettings)
+    expect(picker.props('currentAccountId')).toBe(7)
+    await wrapper.get('[data-testid="bps-proxy-trigger"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="bps-proxy-row-11"]').text()).toContain('First account #7 · admin.accounts.openai.bpsProxyUsageCurrent')
+
+    await wrapper.setProps({ proxiesLoading: true, proxies: [] })
+    expect(picker.props('loading')).toBe(true)
+    expect(wrapper.get('[data-testid="bps-proxy-trigger"]').attributes('disabled')).toBeDefined()
+    await wrapper.setProps({ proxiesLoading: false, proxiesLoadError: true })
+    expect(picker.props('loadError')).toBe(true)
+    await wrapper.get('[data-testid="bps-proxy-catalog-retry"]').trigger('click')
+    expect(wrapper.emitted('retry-proxies')).toHaveLength(1)
+    await wrapper.setProps({ proxiesLoadError: false, proxies })
+    expect(picker.props('proxyIds')).toEqual([11])
+    expect(picker.emitted('update:proxyIds')).toBeUndefined()
+    expect(picker.emitted('update:mode')).toBeUndefined()
+
+    await wrapper.setProps({ account: second })
+    await flushPromises()
+    expect(wrapper.props('show')).toBe(true)
+    expect(picker.props('currentAccountId')).toBe(8)
+    expect(picker.props('proxyIds')).toEqual([22])
+    const trigger = wrapper.get('[data-testid="bps-proxy-trigger"]')
+    if (trigger.attributes('aria-expanded') !== 'true') await trigger.trigger('click')
+    await flushPromises()
+    expect(wrapper.get<HTMLInputElement>('[data-testid="bps-proxy-11"]').element.checked).toBe(false)
+    expect(wrapper.get<HTMLInputElement>('[data-testid="bps-proxy-22"]').element.checked).toBe(true)
+    expect(wrapper.get('[data-testid="bps-proxy-row-22"]').text()).toContain('Second account #8 · admin.accounts.openai.bpsProxyUsageCurrent')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).toHaveBeenCalledWith(8, expect.objectContaining({ proxy_id: 46, concurrency: 9, extra: expect.objectContaining({ openai_proxy_mode: 'request', openai_proxy_ids: [22] }) }))
+  })
+
+  it('saves and reopens the selected BPS request proxy group without changing the OAuth proxy or concurrency', async () => {
+    const account = { ...buildOpenAIOAuthParentAccount(), proxy_id: 45, concurrency: 6, extra: { openai_excel_bps: true, fixture: 'kept' } }
+    const proxies = [
+      { id: 11, name: 'Proxy A', status: 'active', expires_at: null },
+      { id: 22, name: 'Proxy B', status: 'active', expires_at: null },
+      { id: 33, name: 'Proxy C', status: 'inactive', expires_at: null },
+    ] as any[]
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await wrapper.setProps({ proxies })
+    await flushPromises()
+    await wrapper.get('[data-testid="openai-proxy-mode-request"]').setValue()
+    await wrapper.get('[data-testid="bps-proxy-trigger"]').trigger('click')
+    expect(wrapper.get('[data-testid="bps-proxy-33"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="bps-proxy-11"]').setValue(true)
+    await wrapper.get('[data-testid="bps-proxy-22"]').setValue(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload).toMatchObject({ proxy_id: 45, concurrency: 6, extra: { fixture: 'kept', openai_proxy_mode: 'request', openai_proxy_ids: [11, 22] } })
+    wrapper.unmount()
+    const reopened = mountModal({ ...account, extra: payload.extra })
+    await reopened.setProps({ proxies })
+    expect(reopened.get<HTMLInputElement>('[data-testid="openai-proxy-mode-request"]').element.checked).toBe(true)
+    await reopened.get('[data-testid="bps-proxy-trigger"]').trigger('click')
+    expect(reopened.get<HTMLInputElement>('[data-testid="bps-proxy-11"]').element.checked).toBe(true)
+    expect(reopened.get<HTMLInputElement>('[data-testid="bps-proxy-22"]').element.checked).toBe(true)
+    expect(reopened.getComponent({ name: 'OpenAIProxySettings' }).props('singleProxyId')).toBe(45)
+    await reopened.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).toHaveBeenLastCalledWith(7, expect.objectContaining({ proxy_id: 45, concurrency: 6, extra: expect.objectContaining({ openai_proxy_mode: 'request', openai_proxy_ids: [11, 22] }) }))
+  })
+
+  it('requires a selected proxy before saving BPS request mode', async () => {
+    const account = { ...buildOpenAIOAuthParentAccount(), extra: { openai_excel_bps: true } }
+    updateAccountMock.mockReset()
+    const wrapper = mountModal(account)
+    await flushPromises()
+    await wrapper.get('[data-testid="openai-proxy-mode-request"]').setValue()
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).not.toHaveBeenCalled()
+    expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.openai.proxyRequired')
+  })
+
+  it('keeps request routing active for ordinary OAuth when BPS is disabled', async () => {
+    const account = { ...buildOpenAIOAuthParentAccount(), proxy_id: 45, concurrency: 6, extra: { openai_excel_bps: true, openai_excel_bps_proxy_mode: 'request', openai_excel_bps_proxy_ids: [11, 22], unrelated: 'kept' } }
+    const proxies = [{ id: 11, name: 'Proxy A', status: 'active', expires_at: null }, { id: 22, name: 'Proxy B', status: 'active', expires_at: null }] as any[]
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await wrapper.setProps({ proxies })
+    await flushPromises()
+    await wrapper.get('[data-testid="excel-bps-toggle"]').trigger('click')
+    expect(wrapper.find('[data-testid="bps-proxy-routing"]').exists()).toBe(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload).toMatchObject({ proxy_id: 45, concurrency: 6, extra: { openai_proxy_mode: 'request', openai_proxy_ids: [11, 22], unrelated: 'kept' } })
+    expect(payload.extra.openai_excel_bps).not.toBe(true)
+    wrapper.unmount()
+    const reopened = mountModal({ ...account, extra: payload.extra })
+    await reopened.setProps({ proxies })
+    await flushPromises()
+    await reopened.get('[data-testid="excel-bps-toggle"]').trigger('click')
+    expect(reopened.get<HTMLInputElement>('[data-testid="openai-proxy-mode-request"]').element.checked).toBe(true)
+    await reopened.get('[data-testid="bps-proxy-trigger"]').trigger('click')
+    expect(reopened.get<HTMLInputElement>('[data-testid="bps-proxy-11"]').element.checked).toBe(true)
+    expect(reopened.get<HTMLInputElement>('[data-testid="bps-proxy-22"]').element.checked).toBe(true)
+  })
+
+  it('returns to the existing session proxy settings only after explicitly selecting session mode', async () => {
+    const account = { ...buildOpenAIOAuthParentAccount(), extra: { openai_excel_bps: true, openai_excel_bps_mihomo: true, openai_excel_bps_proxy_source: 'ip_pool', openai_excel_bps_proxy_mode: 'request', openai_excel_bps_proxy_ids: [11], unrelated: 'kept' } }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="excel-bps-mihomo"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="openai-proxy-mode-single"]').setValue()
+    expect(wrapper.get<HTMLInputElement>('[data-testid="excel-bps-mihomo"]').element.checked).toBe(true)
+    expect(wrapper.get<HTMLInputElement>('[data-testid="excel-bps-proxy-source-ip-pool"]').element.checked).toBe(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    const extra = updateAccountMock.mock.calls[0]?.[1]?.extra
+    expect(extra).toMatchObject({ openai_excel_bps: true, openai_excel_bps_mihomo: true, openai_excel_bps_proxy_source: 'ip_pool', openai_proxy_mode: 'single', openai_proxy_ids: [11], unrelated: 'kept' })
+    wrapper.unmount()
+    const reopened = mountModal({ ...account, extra })
+    await flushPromises()
+    expect(reopened.get<HTMLInputElement>('[data-testid="openai-proxy-mode-single"]').element.checked).toBe(true)
+    expect(reopened.find('[data-testid="bps-proxy-options"]').exists()).toBe(false)
+    expect(reopened.get<HTMLInputElement>('[data-testid="excel-bps-proxy-source-ip-pool"]').element.checked).toBe(true)
+  })
+
+  it('keeps unavailable and deleted selections visible without adding other proxies', async () => {
+    const account = { ...buildOpenAIOAuthParentAccount(), extra: { openai_excel_bps: true, openai_excel_bps_proxy_mode: 'request', openai_excel_bps_proxy_ids: [11, 99] } }
+    const proxies = [
+      { id: 11, name: 'Unavailable chosen proxy', protocol: 'http', host: 'unavailable.example.test', port: 8080, status: 'inactive', expires_at: null },
+      { id: 22, name: 'Available unrelated proxy', protocol: 'http', host: 'available.example.test', port: 8080, status: 'active', expires_at: null },
+      { id: 33, name: 'Expired unrelated proxy', protocol: 'http', host: 'expired.example.test', port: 8080, status: 'active', expires_at: '2020-01-01T00:00:00Z' },
+    ] as any[]
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await wrapper.setProps({ proxies })
+    await flushPromises()
+    await wrapper.get('[data-testid="bps-proxy-trigger"]').trigger('click')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="bps-proxy-11"]').element.checked).toBe(true)
+    expect(wrapper.get<HTMLInputElement>('[data-testid="bps-proxy-99"]').element.checked).toBe(true)
+    expect(wrapper.get<HTMLInputElement>('[data-testid="bps-proxy-22"]').element.checked).toBe(false)
+    expect(wrapper.get('[data-testid="bps-proxy-33"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="bps-proxy-routing"] input[type="search"]').setValue('unrelated')
+    expect(wrapper.find('[data-testid="bps-proxy-11"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="bps-proxy-99"]').setValue(false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_proxy_ids).toEqual([11])
+  })
+
+  it('dismisses the shared OpenAI request routing announcement across entries and reloads', async () => {
+    localStorage.clear()
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const account = { ...buildOpenAIOAuthParentAccount(), extra: { openai_excel_bps: true } }
+    const wrapper = mountModal(account)
+    await flushPromises()
+    const announcement = wrapper.findAllComponents(NewFeatureBadge).find(badge => badge.props('noticeId') === NEW_FEATURE_NOTICES.openaiAccountMultiProxy)!
+    expect(announcement.props('userId')).toBe(41)
+    const sibling = mount(NewFeatureBadge, { props: { noticeId: NEW_FEATURE_NOTICES.openaiAccountMultiProxy, userId: 41 }, global: { plugins: [pinia] } })
+    await announcement.get('button').trigger('click')
+    expect(sibling.find('button').exists()).toBe(false)
+    wrapper.unmount()
+    sibling.unmount()
+    setActivePinia(createPinia())
+    const reloaded = mountModal(account)
+    await flushPromises()
+    expect(reloaded.get('[data-testid="openai-proxy-settings"]').find('[data-testid="new-feature-badge"]').exists()).toBe(false)
+    expect(useNewFeatureNoticeStore().isDismissed(41, NEW_FEATURE_NOTICES.openaiAccountMultiProxy)).toBe(true)
+  })
+
+  it('groups the request routing choices for native keyboard navigation', async () => {
+    const account = { ...buildOpenAIOAuthParentAccount(), extra: { openai_excel_bps: true } }
+    const wrapper = mountModal(account)
+    await flushPromises()
+    const sessionName = wrapper.get('[data-testid="openai-proxy-mode-single"]').attributes('name')
+    expect(sessionName).toBeTruthy()
+    expect(wrapper.get('[data-testid="openai-proxy-mode-request"]').attributes('name')).toBe(sessionName)
+  })
+
   it.each(['active', 'error'])('omits unchanged OpenAI OAuth status %s from an unrelated edit', async (status) => {
     const account = { ...buildOpenAIOAuthParentAccount(), status }
     updateAccountMock.mockReset().mockResolvedValue(account)
@@ -3006,7 +3236,7 @@ describe('Excel BPS default template integration', () => {
     account.extra = { unrelated: 'keep' }
     updateAccountMock.mockReset().mockResolvedValue(account)
     checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
-    vi.mocked(getAutoConfig).mockResolvedValueOnce({ excel_bps: { ...defaultExcelBPSDefaults(), models: ['my-bps-model'] } } as Awaited<ReturnType<typeof getAutoConfig>>)
+    vi.mocked(getAutoConfig).mockResolvedValueOnce({ excel_bps: { ...defaultExcelBPSDefaults(), models: ['my-bps-model'], web_search: true, web_search_auto: true } } as Awaited<ReturnType<typeof getAutoConfig>>)
     const wrapper = mountModal(account)
     await wrapper.get('[data-testid="excel-bps-defaults-toggle"]').trigger('click')
     await flushPromises()
@@ -3016,6 +3246,7 @@ describe('Excel BPS default template integration', () => {
     await wrapper.get('form#edit-account-form').trigger('submit.prevent'); await flushPromises()
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toMatchObject({
       unrelated: 'keep', openai_excel_bps: true, openai_excel_bps_config_mode: 'defaults', openai_excel_bps_models: ['my-bps-model'],
+      openai_excel_bps_web_search: true, openai_excel_bps_web_search_auto: true,
       openai_excel_bps_ignore_encrypted_content: true, openai_excel_bps_auto_disable_on_403: true,
       openai_excel_bps_cache_creation_as_input: true
     })
@@ -3114,6 +3345,10 @@ describe('EditAccountModal gemini explicit cache upstream switch', () => {
 })
 
 describe('EditAccountModal temp-unschedulable rule scope', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
   function buildAccountWithTempUnschedRules(rules: Array<Record<string, unknown>>) {
     const account = buildAccount()
     return {
@@ -3185,6 +3420,127 @@ describe('EditAccountModal temp-unschedulable rule scope', () => {
     await addRule!.trigger('click')
 
     expect(checkedScopes(wrapper)).toEqual(['temp-unsched-scope-model'])
+    wrapper.unmount()
+  })
+
+  const checkedStreamTimings = (wrapper: ReturnType<typeof mountModal>) =>
+    wrapper
+      .findAll('[data-testid^="temp-unsched-stream-"][aria-checked="true"]')
+      .map((radio) => radio.attributes('data-testid'))
+
+  it('shows a timing choice and count for saved rules that omit the new fields', async () => {
+    const account = buildAccountWithTempUnschedRules([
+      { error_code: 429, keywords: ['rate limit'], duration_minutes: 10 },
+      { error_code: 502, keywords: ['bad gateway'], duration_minutes: 5 }
+    ])
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+
+    expect(checkedStreamTimings(wrapper)).toEqual([
+      'temp-unsched-stream-after_stream',
+      'temp-unsched-stream-before_stream'
+    ])
+    const announcements = wrapper.findAllComponents(NewFeatureBadge).filter(
+      (badge) => badge.props('noticeId') === NEW_FEATURE_NOTICES.tempUnschedStreamCountWindow
+    )
+    expect(announcements).toHaveLength(2)
+    expect(announcements.every((badge) => badge.props('userId') === 41)).toBe(true)
+    await announcements[0].get('button').trigger('click')
+    expect(
+      wrapper.findAllComponents(NewFeatureBadge).filter(
+        (badge) => badge.props('noticeId') === NEW_FEATURE_NOTICES.tempUnschedStreamCountWindow && badge.find('button').exists()
+      )
+    ).toHaveLength(0)
+    const counts = wrapper.findAll('[data-testid="temp-unsched-trigger-count"]')
+    expect(counts).toHaveLength(2)
+    expect((counts[0].element as HTMLInputElement).value).toBe('1')
+    expect((counts[1].element as HTMLInputElement).value).toBe('1')
+    const windows = wrapper.findAll('[data-testid="temp-unsched-trigger-window"]')
+    expect(windows).toHaveLength(2)
+    expect((windows[0].element as HTMLInputElement).value).toBe('1')
+    expect((windows[1].element as HTMLInputElement).value).toBe('1')
+
+    await counts[1].setValue('3')
+    await windows[1].setValue('8')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(savedRules()).toMatchObject([
+      { error_code: 429, trigger_count: 1, trigger_window_minutes: 1 },
+      { error_code: 502, trigger_count: 3, trigger_window_minutes: 8 }
+    ])
+    expect(savedRules()[0]).not.toHaveProperty('stream_timing')
+    expect(savedRules()[1]).not.toHaveProperty('stream_timing')
+    wrapper.unmount()
+  })
+
+  it('keeps an omitted legacy 529 timing when only another account field is saved', async () => {
+    const account = buildAccountWithTempUnschedRules([
+      {
+        error_code: 529,
+        keywords: ['Overloaded'],
+        duration_minutes: 15,
+        description: 'legacy overload',
+        scope: 'model'
+      }
+    ])
+    account.platform = 'anthropic'
+    account.name = 'Claude relay'
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+
+    expect(checkedStreamTimings(wrapper)).toEqual(['temp-unsched-stream-after_stream'])
+    await wrapper.get('[data-tour="edit-account-form-name"]').setValue('Claude relay renamed')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledWith(
+      account.id,
+      expect.objectContaining({ name: 'Claude relay renamed' })
+    )
+    expect(savedRules()).toHaveLength(1)
+    expect(savedRules()[0]).toMatchObject({
+      error_code: 529,
+      keywords: ['Overloaded'],
+      duration_minutes: 15,
+      description: 'legacy overload',
+      scope: 'model'
+    })
+    expect(savedRules()[0]).not.toHaveProperty('stream_timing')
+    wrapper.unmount()
+  })
+
+  it('writes stream_timing only after the operator changes that control', async () => {
+    const account = buildAccountWithTempUnschedRules([
+      { error_code: 529, keywords: ['Overloaded'], duration_minutes: 15, scope: 'model' }
+    ])
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+
+    await wrapper.get('[data-testid="temp-unsched-stream-before_stream"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(savedRules()[0]).toMatchObject({ error_code: 529, stream_timing: 'before_stream' })
+    wrapper.unmount()
+  })
+
+  it('defaults a custom rule to before-stream and count 1, and presets to after-stream', async () => {
+    const wrapper = mountModal(buildAccountWithTempUnschedRules([]))
+
+    const addRule = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('admin.accounts.tempUnschedulable.addRule'))
+    await addRule!.trigger('click')
+    expect(checkedStreamTimings(wrapper)).toEqual(['temp-unsched-stream-before_stream'])
+    expect((wrapper.get('[data-testid="temp-unsched-trigger-count"]').element as HTMLInputElement).value).toBe('1')
+    expect((wrapper.get('[data-testid="temp-unsched-trigger-window"]').element as HTMLInputElement).value).toBe('5')
+
+    const preset = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('admin.accounts.tempUnschedulable.presets.overloadLabel'))
+    await preset!.trigger('click')
+    expect(checkedStreamTimings(wrapper)).toEqual([
+      'temp-unsched-stream-before_stream',
+      'temp-unsched-stream-after_stream'
+    ])
     wrapper.unmount()
   })
 })

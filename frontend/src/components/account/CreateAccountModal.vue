@@ -1536,6 +1536,13 @@
 
       <!-- API Key input (only for apikey type, excluding Antigravity which has its own fields) -->
       <div v-if="form.type === 'apikey' && form.platform !== 'antigravity'" class="space-y-4">
+        <div v-if="!authStore.isObserver" class="flex flex-wrap items-center gap-2">
+          <button type="button" class="btn btn-secondary" :aria-pressed="!providerImportMode" @click="providerImportMode = false">{{ t('matureProviders.manual') }}</button>
+          <button type="button" data-testid="provider-import-mode" class="btn btn-secondary" :aria-pressed="providerImportMode" @click="providerImportMode = true; apiKeyValue = ''; upstreamBillingAutoProbeEnabled = false">{{ t('matureProviders.useProvider') }}</button>
+          <NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.matureProviderImport" :user-id="authStore.user?.id" />
+        </div>
+        <MatureProviderImport v-if="providerImportMode && !authStore.isObserver" :platform="form.platform" @select="providerSelection = $event" />
+        <template v-if="!providerImportMode">
         <div v-if="!isMultiProtocolPlatform || apiProtocol !== 'adaptive'">
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
@@ -1597,6 +1604,7 @@
           <p v-if="apiKeyHint" class="input-hint">{{ apiKeyHint }}</p>
         </div>
 
+        </template>
         <!-- 上游倍率自动探测：全部 API-key 平台可用（所在区块已限定 apikey 类型） -->
         <div
           class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
@@ -1609,6 +1617,7 @@
           </div>
           <Toggle
             v-model="upstreamBillingAutoProbeEnabled"
+            :disabled="providerImportMode"
             data-testid="upstream-billing-auto-probe"
             :aria-label="t('admin.accounts.upstreamBilling.autoProbe')"
           />
@@ -2767,6 +2776,7 @@
                     class="input"
                     :placeholder="t('admin.accounts.tempUnschedulable.durationPlaceholder')"
                   />
+                  <p class="input-hint">{{ t('admin.accounts.tempUnschedulable.durationHint') }}</p>
                 </div>
                 <div class="sm:col-span-2">
                   <label class="input-label">{{ t('admin.accounts.tempUnschedulable.scope') }}</label>
@@ -2805,6 +2815,72 @@
                     </button>
                   </div>
                   <p class="input-hint">{{ t('admin.accounts.tempUnschedulable.scopeHint') }}</p>
+                </div>
+                <div class="sm:col-span-2">
+                  <div class="flex items-center gap-2">
+                    <label class="input-label">{{ t('admin.accounts.tempUnschedulable.streamTiming') }}</label>
+                    <NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.tempUnschedStreamCountWindow" :user-id="authStore.user?.id" />
+                  </div>
+                  <div
+                    class="grid grid-cols-1 gap-2 sm:grid-cols-2"
+                    role="radiogroup"
+                    :aria-label="t('admin.accounts.tempUnschedulable.streamTiming')"
+                  >
+                    <button
+                      v-for="option in tempUnschedStreamTimingOptions"
+                      :key="option.value"
+                      type="button"
+                      role="radio"
+                      :aria-checked="rule.stream_timing === option.value"
+                      :data-testid="`temp-unsched-stream-${option.value}`"
+                      @click="rule.stream_timing = option.value"
+                      :class="[
+                        'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+                        rule.stream_timing === option.value
+                          ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                          : 'border-gray-200 hover:border-gray-400 dark:border-dark-600 dark:hover:border-gray-600'
+                      ]"
+                    >
+                      <span
+                        :class="[
+                          'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2',
+                          rule.stream_timing === option.value ? 'border-primary-500' : 'border-gray-300 dark:border-dark-500'
+                        ]"
+                      >
+                        <span v-if="rule.stream_timing === option.value" class="h-1.5 w-1.5 rounded-full bg-primary-500" />
+                      </span>
+                      <span>
+                        <span class="block text-sm font-medium text-gray-900 dark:text-white">{{ option.label }}</span>
+                        <span class="text-xs text-gray-500 dark:text-gray-400">{{ option.description }}</span>
+                      </span>
+                    </button>
+                  </div>
+                  <p class="input-hint">{{ t('admin.accounts.tempUnschedulable.streamTimingHint') }}</p>
+                </div>
+                <div class="sm:col-span-2">
+                  <label class="input-label">{{ t('admin.accounts.tempUnschedulable.triggerCount') }}</label>
+                  <input
+                    v-model.number="rule.trigger_count"
+                    type="number"
+                    min="1"
+                    max="1000"
+                    class="input"
+                    data-testid="temp-unsched-trigger-count"
+                    :placeholder="t('admin.accounts.tempUnschedulable.triggerCountPlaceholder')"
+                  />
+                  <p class="input-hint">{{ t('admin.accounts.tempUnschedulable.triggerCountHint') }}</p>
+                </div>
+                <div class="sm:col-span-2">
+                  <label class="input-label">{{ t('admin.accounts.tempUnschedulable.triggerWindowMinutes') }}</label>
+                  <input
+                    v-model.number="rule.trigger_window_minutes"
+                    type="number"
+                    min="1"
+                    class="input"
+                    data-testid="temp-unsched-trigger-window"
+                    :placeholder="t('admin.accounts.tempUnschedulable.triggerWindowPlaceholder')"
+                  />
+                  <p class="input-hint">{{ t('admin.accounts.tempUnschedulable.triggerWindowHint') }}</p>
                 </div>
                 <div class="sm:col-span-2">
                   <label class="input-label">{{ t('admin.accounts.tempUnschedulable.keywords') }}</label>
@@ -3181,7 +3257,14 @@
           <label class="input-label mb-0">{{ t('admin.accounts.proxy') }}</label>
           <ProxyAdBanner />
         </div>
-        <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
+        <OpenAIProxySettings v-if="form.platform === 'openai' && accountCategory === 'oauth-based'"
+          v-model:mode="openaiProxyMode" v-model:single-proxy-id="form.proxy_id" v-model:proxy-ids="openaiProxyIds"
+          :proxies="proxies" :loading="proxiesLoading" :load-error="proxiesLoadError"
+          :user-id="authStore.user?.id" @retry="emit('retry-proxies')" />
+        <ProxySelector v-else v-model="form.proxy_id" :proxies="proxies" />
+        <p v-if="isOpenAITwoFA && openaiProxyMode === 'request'" class="input-hint" role="alert" data-testid="openai-proxy-two-fa-hint">
+          {{ t('admin.accounts.openai.proxyTwoFAFirstImport') }}
+        </p>
       </div>
 
       <UpstreamRequestIdHeaderField
@@ -4283,7 +4366,8 @@ import type {
   OpenAICompactMode,
   OpenAIResponsesMode,
   OpenAIEndpointCapability,
-  TempUnschedulableScope
+  TempUnschedulableScope,
+  TempUnschedulableStreamTiming
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import UpstreamChannelSelector from './UpstreamChannelSelector.vue'
@@ -4292,6 +4376,10 @@ import type { CodexSessionImportRequest as UpstreamImportRequest, OpenAICodexPAT
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
+import MatureProviderImport, { type ProviderSelection } from './MatureProviderImport.vue'
+import NewFeatureBadge from '@/components/common/NewFeatureBadge.vue'
+import OpenAIProxySettings from '@/components/account/OpenAIProxySettings.vue'
+import { NEW_FEATURE_NOTICES } from '@/constants/newFeatureNotices'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -4464,12 +4552,15 @@ const apiKeyValuePlaceholder = computed(() => {
 interface Props {
   show: boolean
   proxies: Proxy[]
+  proxiesLoading?: boolean
+  proxiesLoadError?: boolean
   groups: AdminGroup[]
 }
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
   close: []
+  'retry-proxies': []
   created: []
 }>()
 
@@ -4536,6 +4627,9 @@ interface TempUnschedRuleForm {
   description: string
   // 作用范围：account 暂停整个账号，model 只冷却本次请求的模型。
   scope: TempUnschedulableScope
+  stream_timing: TempUnschedulableStreamTiming
+  trigger_count: number
+  trigger_window_minutes: number
 }
 
 // State
@@ -4543,6 +4637,52 @@ const step = ref(1)
 const openaiTwoFA = ref(false)
 const openaiBPSOAuth = ref(false)
 const bpsOAuthModels = ref<string[]>([...DEFAULT_EXCEL_BPS_MODELS])
+const openaiProxyMode = ref<'single' | 'request'>('single')
+const openaiProxyIds = ref<number[]>([])
+const openaiAuthorizationProxy = ref<{
+  sessionId: string
+  mode: 'single' | 'request'
+  proxyId: number | null
+  fingerprint: string | null
+} | null>(null)
+const openaiProxyFingerprint = (proxy: Proxy) => JSON.stringify([
+  proxy.protocol, proxy.host, proxy.port, proxy.username ?? '', proxy.password ?? '',
+])
+const resolveOpenAIMaintenanceProxyId = () => {
+  if (openaiProxyMode.value !== 'request') return form.proxy_id
+  return openaiProxyIds.value.find(id => props.proxies.some(proxy => proxy.id === id && proxy.status === 'active' &&
+    (!proxy.expires_at || Date.parse(proxy.expires_at) > Date.now()))) ?? null
+}
+function validateOpenAIRequestProxies(): boolean {
+  if (form.platform !== 'openai' || accountCategory.value !== 'oauth-based' || openaiProxyMode.value !== 'request') return true
+  if (isOpenAITwoFA.value) {
+    appStore.showError(t('admin.accounts.openai.proxyTwoFAFirstImport'))
+    return false
+  }
+  if (openaiProxyIds.value.length === 0) {
+    appStore.showError(t('admin.accounts.openai.proxyRequired'))
+    return false
+  }
+  if (props.proxiesLoading || props.proxiesLoadError || resolveOpenAIMaintenanceProxyId() === null) {
+    appStore.showError(t('admin.accounts.openai.proxyNoUsable'))
+    return false
+  }
+  return true
+}
+function validateOpenAIAuthorizationProxy(): boolean {
+  const authorization = openaiAuthorizationProxy.value
+  if (authorization?.sessionId === openaiOAuth.sessionId.value && authorization.mode === openaiProxyMode.value) {
+    if (authorization.mode === 'single') return true
+    const proxy = props.proxies.find(candidate => candidate.id === authorization.proxyId)
+    if (!props.proxiesLoading && !props.proxiesLoadError && proxy &&
+      openaiProxyIds.value.includes(proxy.id) && proxy.status === 'active' &&
+      (!proxy.expires_at || Date.parse(proxy.expires_at) > Date.now()) &&
+      openaiProxyFingerprint(proxy) === authorization.fingerprint) return true
+  }
+  openaiOAuth.error.value = t('admin.accounts.openai.proxyAuthorizationChanged')
+  appStore.showError(openaiOAuth.error.value)
+  return false
+}
 const isOpenAIBPSOAuth = computed(() => form.platform === 'openai' && accountCategory.value === 'oauth-based' && openaiBPSOAuth.value)
 // Includes unresolved login ownership while the importer is paused for Retry.
 const twoFABusy = ref(false)
@@ -4555,6 +4695,7 @@ const submitting = ref(false)
 const accountCategory = ref<'oauth-based' | 'apikey' | 'bedrock' | 'service_account'>('oauth-based') // UI selection for account category
 const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-token'
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
+const providerImportMode = ref(false), providerSelection = ref<ProviderSelection | null>(null)
 const apiKeyValue = ref('')
 const upstreamBillingAutoProbeEnabled = ref(true)
 
@@ -5179,6 +5320,18 @@ const tempUnschedScopeOptions = computed<Array<{ value: TempUnschedulableScope; 
     description: t('admin.accounts.tempUnschedulable.scopeAccountDesc')
   }
 ])
+const tempUnschedStreamTimingOptions = computed<Array<{ value: TempUnschedulableStreamTiming; label: string; description: string }>>(() => [
+  {
+    value: 'before_stream',
+    label: t('admin.accounts.tempUnschedulable.streamTimingBefore'),
+    description: t('admin.accounts.tempUnschedulable.streamTimingBeforeDesc')
+  },
+  {
+    value: 'after_stream',
+    label: t('admin.accounts.tempUnschedulable.streamTimingAfter'),
+    description: t('admin.accounts.tempUnschedulable.streamTimingAfterDesc')
+  }
+])
 
 const tempUnschedPresets = computed(() => [
   {
@@ -5188,7 +5341,10 @@ const tempUnschedPresets = computed(() => [
       keywords: 'overloaded, too many',
       duration_minutes: 60,
       description: t('admin.accounts.tempUnschedulable.presets.overloadDesc'),
-      scope: 'model' as const
+      scope: 'model' as const,
+      stream_timing: 'after_stream' as const,
+      trigger_count: 1,
+      trigger_window_minutes: 5
     }
   },
   {
@@ -5198,7 +5354,10 @@ const tempUnschedPresets = computed(() => [
       keywords: 'rate limit, too many requests',
       duration_minutes: 10,
       description: t('admin.accounts.tempUnschedulable.presets.rateLimitDesc'),
-      scope: 'model' as const
+      scope: 'model' as const,
+      stream_timing: 'after_stream' as const,
+      trigger_count: 1,
+      trigger_window_minutes: 5
     }
   },
   {
@@ -5208,7 +5367,10 @@ const tempUnschedPresets = computed(() => [
       keywords: 'unavailable, maintenance',
       duration_minutes: 30,
       description: t('admin.accounts.tempUnschedulable.presets.unavailableDesc'),
-      scope: 'model' as const
+      scope: 'model' as const,
+      stream_timing: 'after_stream' as const,
+      trigger_count: 1,
+      trigger_window_minutes: 5
     }
   }
 ])
@@ -5605,7 +5767,10 @@ const addTempUnschedRule = (preset?: TempUnschedRuleForm) => {
     keywords: '',
     duration_minutes: 30,
     description: '',
-    scope: 'model'
+    scope: 'model',
+    stream_timing: 'before_stream',
+    trigger_count: 1,
+    trigger_window_minutes: 5
   })
 }
 
@@ -5629,6 +5794,9 @@ const buildTempUnschedRules = (rules: TempUnschedRuleForm[]) => {
     duration_minutes: number
     description: string
     scope: TempUnschedulableScope
+    stream_timing: TempUnschedulableStreamTiming
+    trigger_count: number
+    trigger_window_minutes: number
   }> = []
 
   for (const rule of rules) {
@@ -5649,7 +5817,10 @@ const buildTempUnschedRules = (rules: TempUnschedRuleForm[]) => {
       keywords,
       duration_minutes: Math.trunc(duration),
       description: rule.description.trim(),
-      scope: rule.scope
+      scope: rule.scope,
+      stream_timing: rule.stream_timing === 'after_stream' ? 'after_stream' : 'before_stream',
+      trigger_count: resolveTempUnschedTriggerCount(rule.trigger_count),
+      trigger_window_minutes: resolveTempUnschedTriggerWindow(rule.trigger_window_minutes)
     })
   }
 
@@ -5679,6 +5850,22 @@ const splitTempUnschedKeywords = (value: string) => {
     .split(/[,;]/)
     .map((item) => item.trim())
     .filter((item) => item.length > 0)
+}
+
+function resolveTempUnschedTriggerCount(value: unknown): number {
+  const num = Number(value)
+  if (!Number.isFinite(num) || num < 1) {
+    return 1
+  }
+  return Math.min(1000, Math.trunc(num))
+}
+
+function resolveTempUnschedTriggerWindow(value: unknown): number {
+  const num = Number(value)
+  if (!Number.isFinite(num) || num < 1) {
+    return 1
+  }
+  return Math.trunc(num)
 }
 
 const needsMixedChannelCheck = (platform: AccountPlatform) => platform === 'antigravity' || platform === 'anthropic'
@@ -5788,6 +5975,12 @@ async function runChannelCreation<T>(kind: string, payload: unknown, operation: 
  return result
 }
 function createAccountWithUpstream(payload: CreateAccountRequest) {
+ if (providerImportMode.value && payload.type === 'apikey' && providerSelection.value) {
+   const credentials = { ...payload.credentials }
+   delete credentials.api_key
+   delete credentials.base_url
+   payload = { ...payload, credentials, ...providerSelection.value, upstream_billing_probe_enabled: false }
+ }
  const selected = initialChannelId.value > 0 ? { upstream_channel_id: initialChannelId.value, confirm_upstream_channel_binding: initialChannelConfirmed.value } : {}
  return runChannelCreation('account', payload, () => adminAPI.accounts.create({ ...payload, ...selected }), a => [a.id], true)
 }
@@ -5873,6 +6066,9 @@ const resetForm = () => {
   openaiTwoFA.value = false
   openaiBPSOAuth.value = false
   bpsOAuthModels.value = [...DEFAULT_EXCEL_BPS_MODELS]
+  openaiProxyMode.value = 'single'
+  openaiProxyIds.value = []
+  openaiAuthorizationProxy.value = null
   autoBPS.reset()
   twoFABusy.value = false
   form.name = ''
@@ -5899,6 +6095,8 @@ const resetForm = () => {
   openCodeGoProtocolRules.value = cloneOpenCodeGoProtocolRules(defaultOpenCodeProtocolRules('zen'))
   adaptiveBaseUrls.value = { chat_completions: '', anthropic: '', responses: '' }
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
+  providerImportMode.value = false
+  providerSelection.value = null
   apiKeyValue.value = ''
   upstreamRequestIdHeader.value = ''
   upstreamBillingAutoProbeEnabled.value = true
@@ -6027,6 +6225,8 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
     extra.openai_excel_bps_models = [...new Set(bpsOAuthModels.value.map(m => m.trim()).filter(Boolean))]
   }
   if (accountCategory.value === 'oauth-based') {
+    extra.openai_proxy_mode = openaiProxyMode.value
+    extra.openai_proxy_ids = [...openaiProxyIds.value]
     extra.openai_oauth_responses_websockets_v2_mode = openaiOAuthResponsesWebSocketV2Mode.value
     extra.openai_oauth_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiOAuthResponsesWebSocketV2Mode.value)
     applyAccountRPMSettings(extra, {
@@ -6116,13 +6316,17 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
   return Object.keys(extra).length > 0 ? extra : undefined
 }
 
-const buildOpenAICodexImportExtra = (): Record<string, unknown> | undefined => {
+const buildOpenAICodexImportExtra = (supportsProxyGroup = true): Record<string, unknown> | undefined => {
   const extra = buildOpenAIExtra()
   if (!extra) {
     return undefined
   }
   if (!openAILongContextBillingTouched.value) {
     delete extra.openai_long_context_billing_enabled
+  }
+  if (!supportsProxyGroup) {
+    delete extra.openai_proxy_mode
+    delete extra.openai_proxy_ids
   }
   return Object.keys(extra).length > 0 ? extra : undefined
 }
@@ -6259,6 +6463,7 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 }
 
 const handleSubmit = async () => {
+  if (!validateOpenAIRequestProxies()) return
   if (isOpenAIBPSOAuth.value && !bpsOAuthModels.value.some(model => model.trim())) {
     appStore.showError(t('admin.accounts.oauth.openai.excelModelsRequired'))
     return
@@ -6430,7 +6635,8 @@ const handleSubmit = async () => {
   }
 
   // For apikey type, create directly
-  if (!apiKeyValue.value.trim()) {
+  if (providerImportMode.value && !providerSelection.value) { appStore.showError(t('matureProviders.selectKeyRequired')); return }
+  if (!providerImportMode.value && !apiKeyValue.value.trim()) {
     appStore.showError(t('admin.accounts.pleaseEnterApiKey'))
     return
   }
@@ -6572,7 +6778,23 @@ const goBackToBasicInfo = () => {
 
 const handleGenerateUrl = async () => {
   if (form.platform === 'openai') {
-    await openaiOAuth.generateAuthUrl(form.proxy_id, undefined, isOpenAIBPSOAuth.value ? 'excel' : 'codex')
+    if (!validateOpenAIRequestProxies()) return
+    const mode = openaiProxyMode.value
+    const fingerprints = new Map(props.proxies.map(proxy => [proxy.id, openaiProxyFingerprint(proxy)]))
+    openaiAuthorizationProxy.value = null
+    const generated = await openaiOAuth.generateAuthUrl(
+      mode === 'request' ? undefined : form.proxy_id,
+      undefined,
+      isOpenAIBPSOAuth.value ? 'excel' : 'codex',
+      mode === 'request' ? { mode, ids: [...openaiProxyIds.value] } : undefined,
+    )
+    if (generated) {
+      const proxyId = mode === 'request' ? openaiOAuth.authorizationProxyId.value : form.proxy_id
+      openaiAuthorizationProxy.value = {
+        sessionId: openaiOAuth.sessionId.value, mode, proxyId,
+        fingerprint: proxyId === null ? null : fingerprints.get(proxyId) ?? null,
+      }
+    }
   } else if (form.platform === 'gemini') {
     await geminiOAuth.generateAuthUrl(
       form.proxy_id,
@@ -6987,6 +7209,8 @@ const createdImportAccountIds = (result: CodexSessionImportResult) =>
 const handleOpenAIExchange = async (authCode: string) => {
   const oauthClient = openaiOAuth
   if (!authCode.trim() || !oauthClient.sessionId.value) return
+  if (!validateOpenAIAuthorizationProxy()) return
+  if (!validateOpenAIRequestProxies()) return
 
   oauthClient.loading.value = true
   oauthClient.error.value = ''
@@ -7003,7 +7227,8 @@ const handleOpenAIExchange = async (authCode: string) => {
       authCode.trim(),
       oauthClient.sessionId.value,
       stateToUse,
-      form.proxy_id
+      openaiProxyMode.value === 'request' ? undefined : form.proxy_id,
+      openaiProxyMode.value === 'request' ? { mode: 'request', ids: [...openaiProxyIds.value] } : undefined,
     )
     if (!tokenInfo) return
 
@@ -7122,9 +7347,29 @@ const isAgentIdentityImportContent = (content: string) => {
   }
 }
 
+const containsUnsupportedProxyGroupIdentity = (content: string): boolean => {
+  const unsupported = (value: unknown): boolean => {
+    if (Array.isArray(value)) return value.some(unsupported)
+    if (!value || typeof value !== 'object') return false
+    const record = value as Record<string, unknown>
+    const modes = [record.auth_mode, record.authMode, record.openai_auth_mode]
+      .map(mode => String(mode ?? '').trim().toLowerCase())
+    return modes.some(mode => ['agentidentity', 'personalaccesstoken', 'personal_access_token'].includes(mode))
+      || !!(record.agent_identity ?? record.agentIdentity)
+  }
+  try {
+    return unsupported(JSON.parse(content))
+  } catch {
+    return content.split('\n').filter(line => line.trim()).some(line => {
+      try { return unsupported(JSON.parse(line)) } catch { return false }
+    })
+  }
+}
+
 // Reuse Session import normalization and identity deduplication after 2FA login.
 const importTwoFACredential = async (credential: Record<string, unknown>, email: string, login: TokenGuardReloginAccount, signal?: AbortSignal): Promise<'created' | 'skipped'> => {
   signal?.throwIfAborted()
+  if (!validateOpenAIRequestProxies()) throw new Error(t('admin.accounts.openai.proxyNoUsable'))
   const credentialExtras = buildOpenAICodexImportCredentialExtras()
   if (credentialExtras === null) throw new Error('invalid_account_settings')
   const result = await importWithUpstream({
@@ -7186,6 +7431,12 @@ const handleOpenAIImportCodexSession = async (content: string) => {
     oauthClient.error.value = t('admin.accounts.oauth.openai.agentIdentityInvalid')
     return
   }
+  const supportsProxyGroup = !containsUnsupportedProxyGroupIdentity(trimmed)
+  if (openaiProxyMode.value === 'request' && !supportsProxyGroup) {
+    oauthClient.error.value = t('admin.accounts.openai.proxyUnsupportedImport')
+    return
+  }
+  if (!validateOpenAIRequestProxies()) return
 
   const credentialExtras = buildOpenAICodexImportCredentialExtras()
   if (credentialExtras === null) {
@@ -7196,7 +7447,7 @@ const handleOpenAIImportCodexSession = async (content: string) => {
   oauthClient.error.value = ''
 
   try {
-    const extra = buildOpenAICodexImportExtra()
+    const extra = buildOpenAICodexImportExtra(supportsProxyGroup)
     const result = await importWithUpstream({
       content: trimmed,
       name: form.name,
@@ -7263,6 +7514,10 @@ const handleOpenAIImportCodexSession = async (content: string) => {
 
 const handleOpenAIImportCodexPAT = async (accessToken: string) => {
   const oauthClient = openaiOAuth
+  if (openaiProxyMode.value === 'request') {
+    oauthClient.error.value = t('admin.accounts.openai.proxyUnsupportedImport')
+    return
+  }
   const trimmed = accessToken.trim()
   if (!trimmed) {
     oauthClient.error.value = t('admin.accounts.oauth.openai.codexPatEmpty')
@@ -7278,7 +7533,7 @@ const handleOpenAIImportCodexPAT = async (accessToken: string) => {
   oauthClient.error.value = ''
 
   try {
-    const extra = buildOpenAICodexImportExtra()
+    const extra = buildOpenAICodexImportExtra(false)
     await createPATWithUpstream({
       access_token: trimmed,
       name: form.name,
@@ -7315,6 +7570,7 @@ const handleOpenAIImportCodexPAT = async (accessToken: string) => {
 const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string) => {
   const oauthClient = openaiOAuth
   if (!refreshTokenInput.trim()) return
+  if (!validateOpenAIRequestProxies()) return
 
   const refreshTokens = refreshTokenInput
     .split('\n')
@@ -7338,9 +7594,10 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
   try {
     for (let i = 0; i < refreshTokens.length; i++) {
       try {
+        if (!validateOpenAIRequestProxies()) throw new Error(t('admin.accounts.openai.proxyNoUsable'))
         const tokenInfo = await oauthClient.validateRefreshToken(
           refreshTokens[i],
-          form.proxy_id,
+          resolveOpenAIMaintenanceProxyId(),
           clientId
         )
         if (!tokenInfo) {
@@ -7899,4 +8156,5 @@ const handleCookieAuth = async (sessionKey: string) => {
     oauth.loading.value = false
   }
 }
+watch(() => [form.platform, form.type], () => { providerSelection.value = null; if (form.type !== 'apikey') providerImportMode.value = false })
 </script>

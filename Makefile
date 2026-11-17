@@ -1,6 +1,8 @@
 .PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical
 
 FRONTEND_CRITICAL_VITEST := \
+	src/views/admin/__tests__/UsersView.spec.ts \
+	src/components/user/__tests__/UserLiveUsageCell.spec.ts \
 	src/components/common/__tests__/NewFeatureBadge.spec.ts \
 	src/components/admin/group/__tests__/GroupAntiDistillationSettings.spec.ts \
 	src/views/admin/__tests__/ChannelsView.modelSync.spec.ts \
@@ -14,7 +16,6 @@ FRONTEND_CRITICAL_VITEST := \
 	src/utils/__tests__/ccswitchImport.spec.ts \
 	src/components/settings/SmartOpsSidebarSettings.spec.ts \
 	src/utils/__tests__/smartOpsSidebar.spec.ts \
-	src/components/settings/BalanceForecastSettings.spec.ts \
 	src/components/admin/user/__tests__/UserAutoCreditModal.spec.ts \
 	src/components/admin/user/__tests__/UserBalanceHistoryModal.spec.ts \
 	src/components/common/__tests__/VipAutoCreditNotice.spec.ts \
@@ -100,6 +101,7 @@ FRONTEND_CRITICAL_VITEST := \
 	src/utils/__tests__/usageTps.spec.ts \
 	src/utils/__tests__/usageCacheRate.spec.ts \
 	src/utils/__tests__/usageRate.spec.ts \
+	src/components/charts/__tests__/TokenUsageTrend.spec.ts \
 	src/views/admin/ops/components/__tests__/OpsErrorDetailModal.spec.ts \
 	src/router/__tests__/feature-access.spec.ts \
 	src/api/admin/__tests__/requestCaptures.spec.ts \
