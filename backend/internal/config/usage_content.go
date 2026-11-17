@@ -1,9 +1,10 @@
 package config
 
-// UsageContentConfig controls admin-only, fixed 24-hour input/output history.
-// No setting can lengthen retention; the body limit bounds diagnostic overhead.
+// UsageContentConfig controls the per-process, admin-only memory window.
+// The 24-hour TTL is an upper bound, not a durability guarantee.
 type UsageContentConfig struct {
-	Enabled       bool  `mapstructure:"enabled"`
-	MaxBodyBytes  int   `mapstructure:"max_body_bytes"`
-	MaxStorageMiB int64 `mapstructure:"max_storage_mib"`
+	Enabled      bool  `mapstructure:"enabled"`
+	MaxBodyBytes int   `mapstructure:"max_body_bytes"`
+	MaxRecords   int   `mapstructure:"max_records"`
+	MaxMemoryMiB int64 `mapstructure:"max_memory_mib"`
 }

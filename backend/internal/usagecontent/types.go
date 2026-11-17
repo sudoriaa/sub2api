@@ -13,24 +13,25 @@ const (
 	DefaultMaxBodyBytes = 2 << 20
 	HardMaxBodyBytes    = 8 << 20
 	BufferLimit         = 64 << 20
-	QueueSize           = 256
 	MaxSessions         = 512
 	chunkSize           = 16 << 10
-	batchSize           = 16
-	batchBytes          = 8 << 20
-	cleanupBatchSize    = 1000
-	DefaultStorageMiB   = 1024
+	poolChunks          = 64
+	DefaultMaxRecords   = 100
+	HardMaxRecords      = 1000
+	DefaultMemoryBytes  = 64 << 20
+	HardMemoryBytes     = 1024 << 20
 )
 
 var (
-	ErrNotFound     = errors.New("request content not found or expired")
-	ErrBusy         = errors.New("request content reader is busy")
-	ErrStorageLimit = errors.New("request content storage budget reached")
+	ErrNotFound = errors.New("request content not found or expired")
+	ErrBusy     = errors.New("request content reader is busy")
 )
 
 type Config struct {
-	Enabled      bool
-	MaxBodyBytes int
+	Enabled        bool
+	MaxBodyBytes   int
+	MaxRecords     int
+	MaxMemoryBytes int64
 }
 
 type Metadata struct {
@@ -66,14 +67,6 @@ type Detail struct {
 	ResponseBody string `json:"response_body"`
 }
 
-// Record is an internal persistence value. Bodies are gzip-compressed, not JSONB.
-type Record struct {
-	Reference
-	APIKeyID     int64
-	RequestGZIP  []byte
-	ResponseGZIP []byte
-}
-
 type Query struct {
 	APIKeyID        int64
 	RequestID       string
@@ -81,17 +74,10 @@ type Query struct {
 	CaptureID       string
 }
 
-type Store interface {
-	SaveBatch(context.Context, []Record) error
-	References(context.Context, Query) ([]Reference, error)
-	Content(context.Context, Query) (*Record, error)
-	DeleteExpired(context.Context, int) (int64, error)
-}
-
 type Stats struct {
 	Active          int64  `json:"active"`
 	BufferedBytes   int64  `json:"buffered_bytes"`
-	Queued          int    `json:"queued"`
+	Queued          int    `json:"queued"` // Legacy compatibility; always zero in memory mode.
 	Saved           uint64 `json:"saved"`
 	Dropped         uint64 `json:"dropped"`
 	Truncated       uint64 `json:"truncated"`
@@ -99,6 +85,12 @@ type Stats struct {
 	CleanupFailures uint64 `json:"cleanup_failures"`
 	Deleted         uint64 `json:"deleted"`
 	StorageFull     bool   `json:"storage_full"`
+	Records         int    `json:"records"`
+	RetainedBytes   int64  `json:"retained_bytes"`
+	PooledBytes     int64  `json:"pooled_bytes"`
+	ReadBytes       int64  `json:"read_bytes"`
+	MaxRecords      int    `json:"max_records"`
+	MaxMemoryBytes  int64  `json:"max_memory_bytes"`
 }
 
 type contextKey struct{}

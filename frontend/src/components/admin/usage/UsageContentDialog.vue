@@ -6,7 +6,7 @@
         <div class="flex flex-wrap justify-between gap-2"><strong>{{ record.model }}</strong><span>{{ formatDateTime(record.created_at) }}</span></div>
         <div class="mt-2 break-all font-mono text-xs text-gray-500">{{ record.request_id }}</div>
       </div>
-      <p class="text-xs leading-relaxed text-gray-500 dark:text-gray-400">{{ t('usageContent.retentionNote') }}</p>
+      <p class="text-xs leading-relaxed text-gray-500 dark:text-gray-400">{{ t('usageContent.retentionNote', { count: windowRecords, memory: bytes(windowBytes) }) }}</p>
       <p v-if="loading" role="status">{{ t('usageContent.loading') }}</p>
       <div v-else-if="error" role="alert" class="rounded-lg bg-rose-50 p-4 dark:bg-rose-950/30">
         <p>{{ t('usageContent.loadError') }}</p><button type="button" class="btn btn-secondary mt-3" @click="load">{{ t('usageContent.retry') }}</button>
@@ -30,7 +30,8 @@
           </select>
         </label>
         <p v-if="content.partial" role="alert" class="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">{{ t('usageContent.partial') }}</p>
-        <div class="grid gap-4 lg:grid-cols-2">
+        <p v-if="parsing" role="status">{{ t('usageContent.parsing') }}</p>
+        <div v-else class="grid gap-4 lg:grid-cols-2">
           <section class="min-w-0 rounded-xl border border-gray-200 p-4 dark:border-dark-600" data-testid="content-input">
             <header class="mb-3 flex items-center justify-between gap-2"><h3 class="font-semibold">{{ t('usageContent.input') }}</h3>
               <button type="button" class="text-xs text-primary-600 dark:text-primary-400" @click="copy(content.request_body)">{{ t('usageContent.copy') }}</button>
@@ -38,10 +39,11 @@
             <p v-if="content.request_truncated" class="mb-3 text-xs text-amber-700 dark:text-amber-300">{{ t('usageContent.truncated', { stored: bytes(content.request_stored_bytes), total: bytes(content.request_bytes) }) }}</p>
             <p v-if="content.request_omitted === 'binary_content'" class="text-sm text-gray-500">{{ t('usageContent.binaryOmitted') }}</p>
             <div v-else-if="mode === 'conversation' && messages.length" class="max-h-[65vh] space-y-3 overflow-auto">
-              <article v-for="(message, index) in messages" :key="index" class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800">
+              <article v-for="(message, index) in messages.slice(0, visibleMessages)" :key="index" class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800">
                 <div class="mb-2 text-xs font-semibold text-primary-600 dark:text-primary-400">{{ message.role }}</div>
                 <pre class="whitespace-pre-wrap break-words font-sans text-sm">{{ message.text }}</pre>
               </article>
+              <button v-if="messages.length > visibleMessages" type="button" class="btn btn-secondary" @click="visibleMessages += 50">{{ t('usageContent.showMore') }}</button>
             </div>
             <textarea v-else readonly spellcheck="false" rows="16" class="w-full resize-y rounded-lg bg-gray-50 p-3 font-mono text-xs dark:bg-dark-800"
               :aria-label="t('usageContent.input')" :value="rawRequest" />
@@ -70,12 +72,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useWindowSize } from '@vueuse/core'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import { formatDateTime } from '@/utils/format'
-import { formatUsageRawBody, usageRequestMessages, usageResponseOutput } from '@/utils/usageContent'
+import { emptyUsageContentPresentation, parseUsageContentPresentation, type UsageContentPresentation } from '@/utils/usageContentPresentation'
 import { getUsageContent, type UsageContentDetail, type UsageContentRecord, type UsageContentReference } from '@/api/admin/usageContent'
 
 const props = withDefaults(defineProps<{ record: UsageContentRecord | null; errorRecord?: boolean }>(), { errorRecord: false })
@@ -89,12 +91,51 @@ const copied = ref(false), copyFailed = ref(false), mode = ref<'conversation' | 
 const views = [{ value: 'conversation', label: 'usageContent.conversation' }, { value: 'raw', label: 'usageContent.raw' }] as const
 let controller: AbortController | undefined
 let expiryTimer: ReturnType<typeof setTimeout> | undefined
-const messages = computed(() => usageRequestMessages(content.value?.request_body ?? ''))
-const output = computed(() => usageResponseOutput(content.value?.response_body ?? ''))
+const windowRecords = ref(100), windowBytes = ref(64 * 1024 * 1024)
+const presentation = shallowRef(emptyUsageContentPresentation())
+const parsing = ref(false), visibleMessages = ref(50)
+const messages = computed(() => presentation.value.messages)
+const output = computed(() => presentation.value.output)
 const hasReadableOutput = computed(() => !!output.value.text || !!output.value.reasoning || output.value.tools.length > 0)
-const rawRequest = computed(() => formatUsageRawBody(content.value?.request_body ?? ''))
-const rawResponse = computed(() => formatUsageRawBody(content.value?.response_body ?? ''))
+const rawRequest = computed(() => presentation.value.rawRequest)
+const rawResponse = computed(() => presentation.value.rawResponse)
 const bytes = (value: number) => value < 1024 ? `${value} B` : value < 1048576 ? `${(value / 1024).toFixed(1)} KiB` : `${(value / 1048576).toFixed(2)} MiB`
+
+watch([content, mode], ([value, currentMode], _, onCleanup) => {
+  let worker: Worker | undefined
+  let stopped = false
+  onCleanup(() => { stopped = true; worker?.terminate() })
+  presentation.value = emptyUsageContentPresentation()
+  parsing.value = false
+  visibleMessages.value = 50
+  if (!value) return
+  const request = value.request_body, response = value.response_body
+  if (request.length + response.length < 128 * 1024) {
+    presentation.value = parseUsageContentPresentation(request, response, currentMode)
+    return
+  }
+  // If workers are unavailable, show the original text rather than freezing
+  // the main thread on a multi-megabyte parse. Never persist worker payloads.
+  const fallback = () => {
+    if (stopped) return
+    presentation.value = { ...emptyUsageContentPresentation(), rawRequest: request, rawResponse: response }
+    parsing.value = false
+    worker?.terminate()
+  }
+  if (typeof Worker === 'undefined') { fallback(); return }
+  try {
+    parsing.value = true
+    worker = new Worker(new URL('../../../workers/usageContent.worker.ts', import.meta.url), { type: 'module' })
+    worker.onmessage = (event: MessageEvent<UsageContentPresentation>) => {
+      if (stopped) return
+      presentation.value = event.data
+      parsing.value = false
+      worker?.terminate()
+    }
+    worker.onerror = fallback
+    worker.postMessage({ request, response, mode: currentMode })
+  } catch { fallback() }
+}, { flush: 'sync' })
 
 function reset() {
   controller?.abort()
@@ -131,6 +172,8 @@ async function load() {
     const result = await getUsageContent(recordID, { signal: current.signal, captureId: selected.value || undefined, errorRecord: props.errorRecord })
     if (controller !== current || current.signal.aborted) return
     captures.value = result.captures
+    windowRecords.value = result.stats.max_records ?? 100
+    windowBytes.value = result.stats.max_memory_bytes ?? 64 * 1024 * 1024
     content.value = result.content
     selected.value = result.content?.capture_id ?? ''
     emptyReason.value = result.empty_reason

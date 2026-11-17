@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -19,42 +18,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type usageContentMiddlewareStore struct{ records chan usagecontent.Record }
-
-func (s *usageContentMiddlewareStore) SaveBatch(_ context.Context, records []usagecontent.Record) error {
-	for _, r := range records {
-		s.records <- r
-	}
-	return nil
-}
-func (s *usageContentMiddlewareStore) References(context.Context, usagecontent.Query) ([]usagecontent.Reference, error) {
-	return nil, nil
-}
-func (s *usageContentMiddlewareStore) Content(context.Context, usagecontent.Query) (*usagecontent.Record, error) {
-	return nil, usagecontent.ErrNotFound
-}
-func (s *usageContentMiddlewareStore) DeleteExpired(context.Context, int) (int64, error) {
-	return 0, nil
-}
-
-func decodeUsageBody(t *testing.T, raw []byte) string {
-	t.Helper()
-	r, err := gzip.NewReader(bytes.NewReader(raw))
-	require.NoError(t, err)
-	defer func() { _ = r.Close() }()
-	b, err := io.ReadAll(r)
-	require.NoError(t, err)
-	return string(b)
-}
-
 func TestUsageContentMiddlewarePreservesOriginalInputAndExactStream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	input := []byte(`{"model":"original","input":"question"}`)
 	output := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"answer\"}\n\ndata: [DONE]\n\n"
 	for _, kind := range []string{"plain", "gzip", "preread"} {
 		t.Run(kind, func(t *testing.T) {
-			store := &usageContentMiddlewareStore{records: make(chan usagecontent.Record, 1)}
-			m := usagecontent.New(store, usagecontent.Config{Enabled: true, MaxBodyBytes: 1024})
+			m := usagecontent.New(usagecontent.Config{Enabled: true, MaxBodyBytes: 1024})
 			defer func() { require.NoError(t, m.Close(context.Background())) }()
 			r := gin.New()
 			r.Use(ClientRequestID(), func(c *gin.Context) {
@@ -101,19 +71,18 @@ func TestUsageContentMiddlewarePreservesOriginalInputAndExactStream(t *testing.T
 			require.Equal(t, http.StatusOK, w.Code)
 			require.True(t, w.Flushed)
 			require.Equal(t, output, w.Body.String())
-			select {
-			case record := <-store.records:
-				require.Equal(t, string(input), decodeUsageBody(t, record.RequestGZIP))
-				require.Equal(t, output, decodeUsageBody(t, record.ResponseGZIP))
-				require.Equal(t, "billed-response", record.RequestID)
-				require.Equal(t, w.Header().Get("X-Client-Request-ID"), record.ClientRequestID)
-				raw, err := json.Marshal(record.Reference)
-				require.NoError(t, err)
-				for _, secret := range []string{"QUERY-SECRET", "AUTH-SECRET", "COOKIE-SECRET"} {
-					require.NotContains(t, string(raw), secret)
-				}
-			case <-time.After(5 * time.Second):
-				t.Fatal("missing capture")
+			_, record, release, readErr := m.Read(context.Background(), usagecontent.Query{APIKeyID: 11, RequestID: "billed-response"})
+			require.NoError(t, readErr)
+			require.NotNil(t, record)
+			defer release()
+			require.Equal(t, string(input), record.RequestBody)
+			require.Equal(t, output, record.ResponseBody)
+			require.Equal(t, "billed-response", record.RequestID)
+			require.Equal(t, w.Header().Get("X-Client-Request-ID"), record.ClientRequestID)
+			raw, err := json.Marshal(record.Reference)
+			require.NoError(t, err)
+			for _, secret := range []string{"QUERY-SECRET", "AUTH-SECRET", "COOKIE-SECRET"} {
+				require.NotContains(t, string(raw), secret)
 			}
 		})
 	}
@@ -121,8 +90,7 @@ func TestUsageContentMiddlewarePreservesOriginalInputAndExactStream(t *testing.T
 
 func TestUsageContentMiddlewareTruncatesOnlyCaptureAndSupportsDirectJSONBinding(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	store := &usageContentMiddlewareStore{records: make(chan usagecontent.Record, 1)}
-	m := usagecontent.New(store, usagecontent.Config{Enabled: true, MaxBodyBytes: 16})
+	m := usagecontent.New(usagecontent.Config{Enabled: true, MaxBodyBytes: 16})
 	defer func() { require.NoError(t, m.Close(context.Background())) }()
 	r := gin.New()
 	r.Use(ClientRequestID(), func(c *gin.Context) { c.Set(string(ContextKeyAPIKey), &service.APIKey{ID: 5}); c.Next() }, UsageContent(m))
@@ -137,21 +105,51 @@ func TestUsageContentMiddlewareTruncatesOnlyCaptureAndSupportsDirectJSONBinding(
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	require.Equal(t, strings.Repeat("x", 100), w.Body.String())
-	select {
-	case record := <-store.records:
-		require.True(t, record.RequestTruncated)
-		require.True(t, record.ResponseTruncated)
-		require.Equal(t, input[:16], decodeUsageBody(t, record.RequestGZIP))
-		require.EqualValues(t, len(input), record.RequestBytes)
-	case <-time.After(5 * time.Second):
-		t.Fatal("missing capture")
-	}
+	_, record, release, readErr := m.Read(context.Background(), usagecontent.Query{APIKeyID: 5, ClientRequestID: w.Header().Get("X-Client-Request-ID")})
+	require.NoError(t, readErr)
+	require.NotNil(t, record)
+	defer release()
+	require.True(t, record.RequestTruncated)
+	require.True(t, record.ResponseTruncated)
+	require.Equal(t, input[:16], record.RequestBody)
+	require.EqualValues(t, len(input), record.RequestBytes)
+}
+
+type shortUsageContentWriter struct {
+	gin.ResponseWriter
+	called bool
+}
+
+func (w *shortUsageContentWriter) WriteString(string) (int, error) {
+	w.called = true
+	return 3, io.ErrClosedPipe
+}
+
+func TestUsageContentWriterPreservesStringShortWrites(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	m := usagecontent.New(usagecontent.Config{Enabled: true})
+	defer m.Close(context.Background())
+	s := m.Begin(1, "short", "POST", "/responses", "http", "application/json")
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	underlying := &shortUsageContentWriter{ResponseWriter: c.Writer}
+	w := &usageContentWriter{ResponseWriter: underlying, session: s}
+	n, err := w.WriteString("abc-not-delivered")
+	require.Equal(t, 3, n)
+	require.ErrorIs(t, err, io.ErrClosedPipe)
+	require.True(t, underlying.called)
+	s.Finish(200, w.failed)
+	_, d, release, err := m.Read(context.Background(), usagecontent.Query{APIKeyID: 1, ClientRequestID: "short"})
+	defer release()
+	require.NoError(t, err)
+	require.Equal(t, "abc", d.ResponseBody)
+	require.EqualValues(t, 3, d.ResponseBytes)
+	require.True(t, d.Partial)
 }
 
 func TestUsageContentMiddlewareDoesNotRecordUnauthenticatedRequests(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	store := &usageContentMiddlewareStore{records: make(chan usagecontent.Record, 1)}
-	m := usagecontent.New(store, usagecontent.Config{Enabled: true})
+	m := usagecontent.New(usagecontent.Config{Enabled: true})
 	r := gin.New()
 	r.Use(UsageContent(m))
 	r.POST("/v1/responses", func(c *gin.Context) { c.String(401, "unauthorized") })

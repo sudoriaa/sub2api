@@ -9,8 +9,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// bodyBuffer grows in small chunks. Both live requests and queued jobs count
-// against one process-wide byte budget; reaching it never blocks forwarding.
+// bodyBuffer grows in bounded reusable chunks. Live capture bytes have their
+// own budget; publication transfers ownership to the completed window.
 type bodyBuffer struct {
 	chunks    [][]byte
 	length    int
@@ -32,7 +32,7 @@ func (b *bodyBuffer) append(m *Manager, p []byte) {
 				b.omitted = "buffer_capacity"
 				return
 			}
-			b.chunks = append(b.chunks, make([]byte, 0, n))
+			b.chunks = append(b.chunks, m.chunk(n))
 		}
 		last := len(b.chunks) - 1
 		n := min(len(p), cap(b.chunks[last])-len(b.chunks[last]))
@@ -45,12 +45,54 @@ func (b *bodyBuffer) append(m *Manager, p []byte) {
 	}
 }
 
-func (b *bodyBuffer) release(m *Manager) {
+// appendString avoids converting an entire response string to []byte, even
+// after capture is truncated. Only the retained prefix is copied.
+func (b *bodyBuffer) appendString(m *Manager, p string) {
+	b.bytes += int64(len(p))
+	if b.omitted != "" || len(p) == 0 {
+		return
+	}
+	for len(p) > 0 && b.length < m.config.MaxBodyBytes {
+		if len(b.chunks) == 0 || len(b.chunks[len(b.chunks)-1]) == cap(b.chunks[len(b.chunks)-1]) {
+			n := min(chunkSize, m.config.MaxBodyBytes-b.length)
+			if !m.reserve(int64(n)) {
+				b.truncated = true
+				b.omitted = "buffer_capacity"
+				return
+			}
+			b.chunks = append(b.chunks, m.chunk(n))
+		}
+		last := len(b.chunks) - 1
+		n := min(len(p), cap(b.chunks[last])-len(b.chunks[last]))
+		b.chunks[last] = append(b.chunks[last], p[:n]...)
+		b.length += n
+		p = p[n:]
+	}
+	if len(p) > 0 {
+		b.truncated = true
+	}
+}
+
+func (b *bodyBuffer) capacity() int64 {
 	var reserved int64
 	for _, p := range b.chunks {
 		reserved += int64(cap(p))
 	}
-	m.buffered.Add(-reserved)
+	return reserved
+}
+
+func (b *bodyBuffer) text() string {
+	var out strings.Builder
+	out.Grow(b.length)
+	for _, p := range b.chunks {
+		out.Write(p)
+	}
+	return out.String()
+}
+
+func (b *bodyBuffer) release(m *Manager) {
+	m.buffered.Add(-b.capacity())
+	m.recycle(b.chunks)
 	b.chunks = nil
 }
 
@@ -76,7 +118,7 @@ func (m *Manager) Begin(apiKeyID int64, clientRequestID, method, path, protocol,
 	if !m.Enabled() || apiKeyID <= 0 {
 		return nil
 	}
-	if m.storageFull.Load() {
+	if m.buffered.Load() >= BufferLimit {
 		m.dropped.Add(1)
 		return nil
 	}
@@ -98,7 +140,8 @@ func (m *Manager) Begin(apiKeyID int64, clientRequestID, method, path, protocol,
 }
 
 func IsTextContentType(ct string) bool {
-	ct = strings.ToLower(strings.TrimSpace(strings.SplitN(ct, ";", 2)[0]))
+	ct, _, _ = strings.Cut(ct, ";")
+	ct = strings.ToLower(strings.TrimSpace(ct))
 	return ct == "" || strings.HasPrefix(ct, "text/") || ct == "application/json" || strings.HasSuffix(ct, "+json") || ct == "application/x-ndjson"
 }
 
@@ -152,11 +195,31 @@ func (s *Session) Output(p []byte, ct string) {
 	if s.closed || s.finished {
 		return
 	}
+	s.outputTypeLocked(ct)
+	s.output.append(s.m, p)
+}
+
+func (s *Session) outputTypeLocked(ct string) {
+	if ct == s.ref.ResponseContentType {
+		return
+	}
 	s.ref.ResponseContentType = bounded(ct, 128)
 	if !IsTextContentType(ct) {
 		s.output.omitted = "binary_content"
 	}
-	s.output.append(s.m, p)
+}
+
+func (s *Session) OutputString(p, ct string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.finished {
+		return
+	}
+	s.outputTypeLocked(ct)
+	s.output.appendString(s.m, p)
 }
 
 // Acquire retains this session for a queued billing task. Release must also be
@@ -218,8 +281,8 @@ func (s *Session) Finish(status int, partial bool) {
 	s.finalizeLocked()
 }
 
-// The caller holds s.mu. Only bounded copies and a nonblocking enqueue happen
-// here; all gzip and SQL work runs on the single background writer.
+// The caller holds s.mu. Publish immutable chunk ownership into the bounded
+// window. No gzip, SQL, or body-sized copy is performed here.
 func (s *Session) finalizeLocked() {
 	if !s.finished || s.pending != 0 || s.closed {
 		return
@@ -235,5 +298,5 @@ func (s *Session) finalizeLocked() {
 	j := job{ref: s.ref, apiKeyID: s.apiKeyID, input: s.input, output: s.output, bindings: s.bindings}
 	s.input.chunks, s.output.chunks, s.bindings = nil, nil, nil
 	s.m.active.Add(-1)
-	s.m.enqueue(j)
+	s.m.publish(j)
 }

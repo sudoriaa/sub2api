@@ -13,7 +13,8 @@ import (
 )
 
 // UsageContent runs after authentication, before admission/model rewrites. It
-// tees existing reads/writes; it never prereads, buffers or delays a response.
+// tees existing reads/writes with bounded copies; it never prereads or stages
+// response delivery for persistence.
 func UsageContent(manager *usagecontent.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !manager.Enabled() {
@@ -85,7 +86,12 @@ func (w *usageContentWriter) Write(p []byte) (int, error) {
 }
 
 func (w *usageContentWriter) WriteString(value string) (int, error) {
-	return w.Write([]byte(value))
+	n, err := w.ResponseWriter.WriteString(value)
+	if n > 0 {
+		w.session.OutputString(value[:n], w.Header().Get("Content-Type"))
+	}
+	w.failed = w.failed || err != nil
+	return n, err
 }
 
 func (w *usageContentWriter) Flush() { _ = w.FlushError() }

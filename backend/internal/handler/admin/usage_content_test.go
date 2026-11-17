@@ -1,8 +1,6 @@
 package admin
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -30,25 +28,6 @@ func (r *usageContentAdminRepo) GetByID(context.Context, int64) (*service.UsageL
 		return nil, service.ErrUsageLogNotFound
 	}
 	return r.log, nil
-}
-
-type usageContentAdminStore struct {
-	record *usagecontent.Record
-	query  usagecontent.Query
-}
-
-func (s *usageContentAdminStore) SaveBatch(context.Context, []usagecontent.Record) error { return nil }
-func (s *usageContentAdminStore) DeleteExpired(context.Context, int) (int64, error)      { return 0, nil }
-func (s *usageContentAdminStore) References(_ context.Context, q usagecontent.Query) ([]usagecontent.Reference, error) {
-	s.query = q
-	if s.record == nil || !time.Now().Before(s.record.ExpiresAt) {
-		return []usagecontent.Reference{}, nil
-	}
-	return []usagecontent.Reference{s.record.Reference}, nil
-}
-func (s *usageContentAdminStore) Content(_ context.Context, q usagecontent.Query) (*usagecontent.Record, error) {
-	s.query = q
-	return s.record, nil
 }
 
 func TestUsageContentRequiresFullAdminBeforeReadingAnyRecord(t *testing.T) {
@@ -90,18 +69,17 @@ func TestUsageContentRequiresFullAdminBeforeReadingAnyRecord(t *testing.T) {
 func TestUsageContentAdminLoadsOnlySelectedKeyScopedPayloadWithNoStore(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	now := time.Now().UTC()
-	zip := func(body string) []byte {
-		var b bytes.Buffer
-		w := gzip.NewWriter(&b)
-		_, err := w.Write([]byte(body))
-		require.NoError(t, err)
-		require.NoError(t, w.Close())
-		return b.Bytes()
-	}
-	raw := &usagecontent.Record{APIKeyID: 8, Reference: usagecontent.Reference{CaptureID: "00000000-0000-0000-0000-000000000001", RequestID: "billing", ClientRequestID: "server-id", CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}, RequestGZIP: zip(`{"input":"question"}`), ResponseGZIP: zip(`{"output_text":"answer"}`)}
-	store := &usageContentAdminStore{record: raw}
-	m := usagecontent.New(store, usagecontent.Config{Enabled: true})
+	m := usagecontent.New(usagecontent.Config{Enabled: true})
 	defer func() { require.NoError(t, m.Close(context.Background())) }()
+	session := m.Begin(8, "server-id", "POST", "/v1/responses", "http", "application/json")
+	session.Input([]byte(`{"input":"question"}`), "application/json")
+	session.Output([]byte(`{"output_text":"answer"}`), "application/json")
+	session.Bind("billing", 8)
+	session.Finish(200, false)
+	_, raw, release, err := m.Read(context.Background(), usagecontent.Query{APIKeyID: 8, RequestID: "billing"})
+	require.NoError(t, err)
+	require.NotNil(t, raw)
+	release()
 	repo := &usageContentAdminRepo{log: &service.UsageLog{ID: 42, APIKeyID: 8, RequestID: "billing", CreatedAt: now}}
 	h := NewUsageHandler(service.NewUsageService(repo, nil, nil, nil), nil, nil, nil)
 	h.Contents = m
@@ -113,9 +91,6 @@ func TestUsageContentAdminLoadsOnlySelectedKeyScopedPayloadWithNoStore(t *testin
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 	require.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
-	require.EqualValues(t, 8, store.query.APIKeyID)
-	require.Equal(t, "billing", store.query.RequestID)
-	require.Equal(t, raw.CaptureID, store.query.CaptureID)
 	var envelope struct {
 		Data struct {
 			Content        usagecontent.Detail `json:"content"`
@@ -126,6 +101,13 @@ func TestUsageContentAdminLoadsOnlySelectedKeyScopedPayloadWithNoStore(t *testin
 	require.Equal(t, 24, envelope.Data.RetentionHours)
 	require.Equal(t, `{"input":"question"}`, envelope.Data.Content.RequestBody)
 	require.Equal(t, `{"output_text":"answer"}`, envelope.Data.Content.ResponseBody)
+	// A valid capture ID must not cross API key scope.
+	repo.log.APIKeyID = 9
+	other := httptest.NewRecorder()
+	r.ServeHTTP(other, httptest.NewRequest(http.MethodGet, "/usage/42/content?capture_id="+raw.CaptureID, nil))
+	require.Contains(t, other.Body.String(), `"content":null`)
+	repo.log.APIKeyID = 8
+	require.Zero(t, m.Stats().ReadBytes, "HTTP handler must release after serializing")
 	for _, path := range []string{"/usage/not-a-number/content", "/usage/-1/content", "/usage/42/content?capture_id=invalid"} {
 		w = httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))

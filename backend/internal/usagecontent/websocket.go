@@ -144,7 +144,7 @@ func (s *Session) OutputFrame(payload []byte) {
 		return
 	}
 	s.ref.ResponseContentType = "text/event-stream; profile=websocket-frames"
-	s.output.append(s.m, []byte("data: "))
+	s.output.appendString(s.m, "data: ")
 	s.output.append(s.m, payload)
-	s.output.append(s.m, []byte("\n\n"))
+	s.output.appendString(s.m, "\n\n")
 }

@@ -2880,7 +2880,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.max_body_size", int64(256*1024*1024))
 	viper.SetDefault("gateway.usage_content.enabled", true)
 	viper.SetDefault("gateway.usage_content.max_body_bytes", 2*1024*1024)
-	viper.SetDefault("gateway.usage_content.max_storage_mib", 1024)
+	viper.SetDefault("gateway.usage_content.max_records", 100)
+	viper.SetDefault("gateway.usage_content.max_memory_mib", 64)
 	// Without explicit config or env, load() replaces this with a size derived
 	// from the memory limit (see autoRequestBodyMemoryBudget).
 	viper.SetDefault("gateway.request_body_memory_budget_bytes", defaultRequestBodyMemoryBudgetBytes)
@@ -3732,8 +3733,11 @@ func (c *Config) Validate() error {
 	if c.Gateway.UsageContent.MaxBodyBytes < 0 || c.Gateway.UsageContent.MaxBodyBytes > 8*1024*1024 {
 		return fmt.Errorf("gateway.usage_content.max_body_bytes must be between 0 (default) and 8388608")
 	}
-	if c.Gateway.UsageContent.MaxStorageMiB < 0 || c.Gateway.UsageContent.MaxStorageMiB > 102400 {
-		return fmt.Errorf("gateway.usage_content.max_storage_mib must be between 0 (default) and 102400")
+	if c.Gateway.UsageContent.MaxRecords < 0 || c.Gateway.UsageContent.MaxRecords > 1000 {
+		return fmt.Errorf("gateway.usage_content.max_records must be between 0 (default) and 1000")
+	}
+	if c.Gateway.UsageContent.MaxMemoryMiB < 0 || c.Gateway.UsageContent.MaxMemoryMiB > 1024 {
+		return fmt.Errorf("gateway.usage_content.max_memory_mib must be between 0 (default) and 1024")
 	}
 	if c.Gateway.TextMaxBodySize <= 0 || c.Gateway.TextMaxBodySize > c.Gateway.MaxBodySize {
 		return fmt.Errorf("gateway.text_max_body_size must be positive and no greater than gateway.max_body_size")

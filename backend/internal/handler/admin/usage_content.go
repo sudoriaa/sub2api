@@ -106,7 +106,9 @@ func (h *UsageHandler) respondContent(c *gin.Context, query usagecontent.Query, 
 		readCtx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 		defer cancel()
 		var err error
-		refs, detail, err = h.Contents.Read(readCtx, query)
+		var release func()
+		refs, detail, release, err = h.Contents.Read(readCtx, query)
+		defer release() // Keep the reader budget through JSON serialization / writes.
 		if err != nil && !errors.Is(err, usagecontent.ErrNotFound) {
 			if errors.Is(err, usagecontent.ErrBusy) {
 				c.Header("Retry-After", "1")
@@ -125,6 +127,6 @@ func (h *UsageHandler) respondContent(c *gin.Context, query usagecontent.Query, 
 	} else if reason != "expired" && h.Contents.Stats().StorageFull {
 		reason = "capacity"
 	}
-	response.Success(c, gin.H{"content": detail, "captures": refs, "retention_hours": 24,
+	response.Success(c, gin.H{"content": detail, "captures": refs, "retention_hours": 24, "storage_mode": "memory",
 		"enabled": h.Contents.Enabled(), "empty_reason": reason, "stats": h.Contents.Stats()})
 }

@@ -40,8 +40,13 @@ export interface UsageContentResponse {
   captures: UsageContentReference[]
   retention_hours: number
   enabled: boolean
+  storage_mode?: 'memory'
   empty_reason: '' | 'expired' | 'not_recorded' | 'capacity'
-  stats: { dropped: number; write_failures: number; cleanup_failures: number; truncated: number }
+  stats: {
+    dropped: number; write_failures: number; cleanup_failures: number; truncated: number
+    records?: number; max_records?: number; max_memory_bytes?: number
+    retained_bytes?: number; buffered_bytes?: number; pooled_bytes?: number; read_bytes?: number
+  }
 }
 
 // Payloads are intentionally loaded only on a user click, never with a list,

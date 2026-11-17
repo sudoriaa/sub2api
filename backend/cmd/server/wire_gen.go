@@ -333,7 +333,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	adminSubscriptionHandler := admin.NewSubscriptionHandler(subscriptionService)
 	usageCleanupRepository := repository.NewUsageCleanupRepository(client, db)
 	usageCleanupService := service.ProvideUsageCleanupService(usageCleanupRepository, timingWheelService, dashboardAggregationService, configConfig)
-	usagecontentManager := service.ProvideUsageContentManager(db, configConfig)
+	usagecontentManager := service.ProvideUsageContentManager(configConfig)
 	adminUsageHandler := admin.ProvideUsageHandlerWithContent(usageService, apiKeyService, adminService, usageCleanupService, usagecontentManager, opsService)
 	userAttributeHandler := admin.NewUserAttributeHandler(userAttributeService)
 	errorPassthroughRepository := repository.NewErrorPassthroughRepository(client)
