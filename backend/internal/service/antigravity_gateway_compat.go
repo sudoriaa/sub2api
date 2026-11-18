@@ -125,6 +125,9 @@ func (s *AntigravityGatewayService) ForwardAsResponses(
 	if strings.TrimSpace(request.Model) == "" {
 		return nil, s.writeAntigravityCompatError(c, http.StatusBadRequest, "invalid_request_error", "model is required")
 	}
+	if err := applyAntigravityHarnessContextCompatibility(account, &request); err != nil {
+		return nil, s.writeAntigravityCompatError(c, http.StatusBadRequest, "invalid_request_error", "Failed to normalize request input")
+	}
 
 	claudeRequest, err := apicompat.ResponsesToAnthropicRequest(&request)
 	if err != nil {
