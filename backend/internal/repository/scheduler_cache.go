@@ -1408,6 +1408,9 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 	}
 	keys := []string{
 		service.OAuthDegradationActionExtraKey,
+		// Keep the account's explicit client-context compatibility consent when
+		// gateway forwarding receives an account through a scheduler projection.
+		service.AntigravityDeepSeekHarnessContextCompatKey,
 		// Images candidate authorization runs before full-account hydration.
 		service.ExtraImageModelsKey,
 		service.ExtraImageModelPrefixesKey,
