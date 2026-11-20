@@ -93,39 +93,21 @@
   <!-- Default Home Page -->
   <div
     v-else
-    class="relative flex min-h-screen flex-col overflow-hidden bg-gradient-to-br from-gray-50 via-primary-50/30 to-gray-100 dark:from-dark-950 dark:via-dark-900 dark:to-dark-950"
+    class="relative flex min-h-screen flex-col bg-[#f6fafe] text-[#252b3b] dark:bg-dark-950 dark:text-[#eef2fa]"
   >
-    <!-- Background Decorations -->
-    <div class="pointer-events-none absolute inset-0 overflow-hidden">
-      <div
-        class="absolute -right-40 -top-40 h-96 w-96 rounded-full bg-primary-400/20 blur-3xl"
-      ></div>
-      <div
-        class="absolute -bottom-40 -left-40 h-96 w-96 rounded-full bg-primary-500/15 blur-3xl"
-      ></div>
-      <div
-        class="absolute left-1/3 top-1/4 h-72 w-72 rounded-full bg-primary-300/10 blur-3xl"
-      ></div>
-      <div
-        class="absolute bottom-1/4 right-1/4 h-64 w-64 rounded-full bg-primary-400/10 blur-3xl"
-      ></div>
-      <div
-        class="absolute inset-0 bg-[linear-gradient(rgba(20,184,166,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(20,184,166,0.03)_1px,transparent_1px)] bg-[size:64px_64px]"
-      ></div>
-    </div>
-
     <!-- Header -->
-    <header class="relative z-20 px-6 py-4">
+    <header class="relative z-20 border-b border-[#e6edf5] bg-white px-6 py-3 dark:border-dark-700 dark:bg-dark-800">
       <nav class="mx-auto flex max-w-6xl items-center justify-between">
         <!-- Logo -->
-        <div class="flex items-center">
-          <div class="h-10 w-10 overflow-hidden rounded-xl shadow-md">
+        <div class="flex items-center gap-2.5">
+          <div class="h-9 w-9 overflow-hidden rounded-lg border border-primary-200 bg-primary-50 dark:border-[#4d2c3e] dark:bg-[#2e1d27]">
             <img :src="siteLogo || '/logo.svg'" alt="Logo" class="h-full w-full object-contain" />
           </div>
+          <span class="text-base font-bold text-[#252b3b] dark:text-white">{{ siteName }}</span>
         </div>
 
         <!-- Nav Actions -->
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-2">
           <!-- Language Switcher -->
           <LocaleSwitcher />
 
@@ -135,7 +117,7 @@
             :href="docUrl"
             target="_blank"
             rel="noopener noreferrer"
-            class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
+            class="rounded-lg p-2 text-[#5d677e] transition-colors hover:bg-[#f3f7fc] hover:text-[#252b3b] dark:text-dark-300 dark:hover:bg-dark-700 dark:hover:text-white"
             :title="t('home.viewDocs')"
           >
             <Icon name="book" size="md" />
@@ -145,7 +127,7 @@
           <router-link
             v-if="showModelPlazaEntry"
             to="/model-plaza"
-            class="inline-flex items-center gap-1.5 rounded-lg p-2 text-sm text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
+            class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-[#5d677e] transition-colors hover:bg-[#f3f7fc] hover:text-[#252b3b] dark:text-dark-300 dark:hover:bg-dark-700 dark:hover:text-white"
             :title="t('nav.modelPlaza')"
           >
             <Icon name="grid" size="md" />
@@ -155,7 +137,7 @@
           <!-- Theme Toggle -->
           <button
             @click="toggleTheme"
-            class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
+            class="rounded-lg p-2 text-[#5d677e] transition-colors hover:bg-[#f3f7fc] hover:text-[#252b3b] dark:text-dark-300 dark:hover:bg-dark-700 dark:hover:text-white"
             :title="isDark ? t('home.switchToLight') : t('home.switchToDark')"
           >
             <Icon v-if="isDark" name="sun" size="md" />
@@ -166,16 +148,16 @@
           <router-link
             v-if="isAuthenticated"
             :to="dashboardPath"
-            class="inline-flex items-center gap-1.5 rounded-full bg-gray-900 py-1 pl-1 pr-2.5 transition-colors hover:bg-gray-800 dark:bg-gray-800 dark:hover:bg-gray-700"
+            class="inline-flex items-center gap-1.5 rounded-lg bg-primary-500 py-1.5 pl-1.5 pr-3 text-xs font-semibold text-white transition-colors hover:bg-primary-600"
           >
             <span
-              class="flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-br from-primary-400 to-primary-600 text-[10px] font-semibold text-white"
+              class="flex h-5 w-5 items-center justify-center rounded-md bg-white/20 text-[10px] font-bold text-white"
             >
               {{ userInitial }}
             </span>
-            <span class="text-xs font-medium text-white">{{ t('home.dashboard') }}</span>
+            <span>{{ t('home.dashboard') }}</span>
             <svg
-              class="h-3 w-3 text-gray-400"
+              class="h-3 w-3 text-white/90"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -191,7 +173,7 @@
           <router-link
             v-else
             to="/login"
-            class="inline-flex items-center rounded-full bg-gray-900 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-gray-800 dark:bg-gray-800 dark:hover:bg-gray-700"
+            class="inline-flex items-center rounded-lg bg-primary-500 px-3.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-primary-600"
           >
             {{ t('home.login') }}
           </router-link>
@@ -200,18 +182,18 @@
     </header>
 
     <!-- Main Content -->
-    <main class="relative z-10 flex-1 px-6 py-16">
+    <main class="relative z-10 flex-1 px-6 py-14">
       <div class="mx-auto max-w-6xl">
         <!-- Hero Section - Left/Right Layout -->
-        <div class="mb-12 flex flex-col items-center justify-between gap-12 lg:flex-row lg:gap-16">
+        <div class="mb-12 flex flex-col items-center justify-between gap-10 lg:flex-row lg:gap-14">
           <!-- Left: Text Content -->
           <div class="flex-1 text-center lg:text-left">
             <h1
-              class="mb-4 text-4xl font-bold text-gray-900 dark:text-white md:text-5xl lg:text-6xl"
+              class="mb-4 text-4xl font-extrabold tracking-tight text-[#252b3b] dark:text-white md:text-5xl"
             >
               {{ siteName }}
             </h1>
-            <p class="mb-8 text-lg text-gray-600 dark:text-dark-300 md:text-xl">
+            <p class="mb-7 text-base leading-relaxed text-[#5d677e] dark:text-dark-300 md:text-lg">
               {{ siteSubtitle }}
             </p>
 
@@ -219,10 +201,10 @@
             <div>
               <router-link
                 :to="isAuthenticated ? dashboardPath : '/login'"
-                class="btn btn-primary px-8 py-3 text-base shadow-lg shadow-primary-500/30"
+                class="btn btn-primary px-7 py-2.5 text-sm"
               >
                 {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
-                <Icon name="arrowRight" size="md" class="ml-2" :stroke-width="2" />
+                <Icon name="arrowRight" size="md" class="ml-1" :stroke-width="2" />
               </router-link>
             </div>
           </div>
@@ -266,65 +248,59 @@
         </div>
 
         <!-- Feature Tags - Centered -->
-        <div class="mb-12 flex flex-wrap items-center justify-center gap-4 md:gap-6">
+        <div class="mb-10 flex flex-wrap items-center justify-center gap-3 md:gap-4">
           <div
-            class="inline-flex items-center gap-2.5 rounded-full border border-gray-200/50 bg-white/80 px-5 py-2.5 shadow-sm backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/80"
+            class="inline-flex items-center gap-2 rounded-lg border border-primary-200 bg-primary-50 px-4 py-2 dark:border-[#4d2c3e] dark:bg-[#2e1d27]"
           >
-            <Icon name="swap" size="sm" class="text-primary-500" />
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{
+            <Icon name="swap" size="sm" class="text-primary-700 dark:text-[#ff9bbd]" />
+            <span class="text-xs font-semibold text-primary-700 dark:text-[#ff9bbd]">{{
               t('home.tags.subscriptionToApi')
             }}</span>
           </div>
           <div
-            class="inline-flex items-center gap-2.5 rounded-full border border-gray-200/50 bg-white/80 px-5 py-2.5 shadow-sm backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/80"
+            class="inline-flex items-center gap-2 rounded-lg border border-accent-200 bg-accent-50 px-4 py-2 dark:border-[#2a435e] dark:bg-[#1a293a]"
           >
-            <Icon name="shield" size="sm" class="text-primary-500" />
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{
+            <Icon name="shield" size="sm" class="text-accent-700 dark:text-[#8ad0ff]" />
+            <span class="text-xs font-semibold text-accent-700 dark:text-[#8ad0ff]">{{
               t('home.tags.stickySession')
             }}</span>
           </div>
           <div
-            class="inline-flex items-center gap-2.5 rounded-full border border-gray-200/50 bg-white/80 px-5 py-2.5 shadow-sm backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/80"
+            class="inline-flex items-center gap-2 rounded-lg border border-[#e6edf5] bg-white px-4 py-2 dark:border-dark-700 dark:bg-dark-800"
           >
             <Icon name="chart" size="sm" class="text-primary-500" />
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{
+            <span class="text-xs font-semibold text-[#252b3b] dark:text-dark-100">{{
               t('home.tags.realtimeBilling')
             }}</span>
           </div>
         </div>
 
         <!-- Features Grid -->
-        <div class="mb-12 grid gap-6 md:grid-cols-3">
+        <div class="mb-12 grid gap-5 md:grid-cols-3">
           <!-- Feature 1: Unified Gateway -->
-          <div
-            class="group rounded-2xl border border-gray-200/50 bg-white/60 p-6 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-primary-500/10 dark:border-dark-700/50 dark:bg-dark-800/60"
-          >
-            <div
-              class="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 shadow-lg shadow-blue-500/30 transition-transform group-hover:scale-110"
-            >
-              <Icon name="server" size="lg" class="text-white" />
+          <div class="card card-hover p-5">
+            <div class="mb-3.5 h-1.5 w-8 rounded-full bg-primary-500"></div>
+            <div class="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-primary-50 text-primary-700 dark:bg-[#2e1d27] dark:text-[#ff9bbd]">
+              <Icon name="server" size="md" />
             </div>
-            <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
+            <h3 class="mb-1.5 text-base font-bold text-[#252b3b] dark:text-white">
               {{ t('home.features.unifiedGateway') }}
             </h3>
-            <p class="text-sm leading-relaxed text-gray-600 dark:text-dark-400">
+            <p class="text-xs leading-relaxed text-[#5d677e] dark:text-dark-300">
               {{ t('home.features.unifiedGatewayDesc') }}
             </p>
           </div>
 
           <!-- Feature 2: Account Pool -->
-          <div
-            class="group rounded-2xl border border-gray-200/50 bg-white/60 p-6 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-primary-500/10 dark:border-dark-700/50 dark:bg-dark-800/60"
-          >
-            <div
-              class="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 shadow-lg shadow-primary-500/30 transition-transform group-hover:scale-110"
-            >
+          <div class="card card-hover p-5">
+            <div class="mb-3.5 h-1.5 w-8 rounded-full bg-accent-500"></div>
+            <div class="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-accent-50 text-accent-700 dark:bg-[#1a293a] dark:text-[#8ad0ff]">
               <svg
-                class="h-6 w-6 text-white"
+                class="h-5 w-5"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
-                stroke-width="1.5"
+                stroke-width="1.75"
               >
                 <path
                   stroke-linecap="round"
@@ -333,27 +309,24 @@
                 />
               </svg>
             </div>
-            <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
+            <h3 class="mb-1.5 text-base font-bold text-[#252b3b] dark:text-white">
               {{ t('home.features.multiAccount') }}
             </h3>
-            <p class="text-sm leading-relaxed text-gray-600 dark:text-dark-400">
+            <p class="text-xs leading-relaxed text-[#5d677e] dark:text-dark-300">
               {{ t('home.features.multiAccountDesc') }}
             </p>
           </div>
 
           <!-- Feature 3: Billing & Quota -->
-          <div
-            class="group rounded-2xl border border-gray-200/50 bg-white/60 p-6 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-primary-500/10 dark:border-dark-700/50 dark:bg-dark-800/60"
-          >
-            <div
-              class="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-purple-500 to-purple-600 shadow-lg shadow-purple-500/30 transition-transform group-hover:scale-110"
-            >
+          <div class="card card-hover p-5">
+            <div class="mb-3.5 h-1.5 w-8 rounded-full bg-primary-500"></div>
+            <div class="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-primary-50 text-primary-700 dark:bg-[#2e1d27] dark:text-[#ff9bbd]">
               <svg
-                class="h-6 w-6 text-white"
+                class="h-5 w-5"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
-                stroke-width="1.5"
+                stroke-width="1.75"
               >
                 <path
                   stroke-linecap="round"
@@ -362,111 +335,66 @@
                 />
               </svg>
             </div>
-            <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
+            <h3 class="mb-1.5 text-base font-bold text-[#252b3b] dark:text-white">
               {{ t('home.features.balanceQuota') }}
             </h3>
-            <p class="text-sm leading-relaxed text-gray-600 dark:text-dark-400">
+            <p class="text-xs leading-relaxed text-[#5d677e] dark:text-dark-300">
               {{ t('home.features.balanceQuotaDesc') }}
             </p>
           </div>
         </div>
 
         <!-- Supported Providers -->
-        <div class="mb-8 text-center">
-          <h2 class="mb-3 text-2xl font-bold text-gray-900 dark:text-white">
+        <div class="mb-6 text-center">
+          <h2 class="mb-2 text-xl font-bold text-[#252b3b] dark:text-white">
             {{ t('home.providers.title') }}
           </h2>
-          <p class="text-sm text-gray-600 dark:text-dark-400">
+          <p class="text-xs text-[#929cb3] dark:text-dark-400">
             {{ t('home.providers.description') }}
           </p>
         </div>
 
-        <div class="mb-16 flex flex-wrap items-center justify-center gap-4">
+        <div class="mb-14 flex flex-wrap items-center justify-center gap-3">
           <!-- Claude - Supported -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-orange-400 to-orange-500"
-            >
-              <span class="text-xs font-bold text-white">C</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.claude') }}</span>
-            <span
-              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
-              >{{ t('home.providers.supported') }}</span
-            >
+          <div class="flex items-center gap-2.5 rounded-xl border border-primary-200 bg-white px-4 py-2.5 dark:border-[#4d2c3e] dark:bg-dark-800">
+            <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-500 text-xs font-bold text-white">C</div>
+            <span class="text-sm font-semibold text-[#252b3b] dark:text-dark-100">{{ t('home.providers.claude') }}</span>
+            <span class="badge badge-primary !py-0 text-[10px]">{{ t('home.providers.supported') }}</span>
           </div>
           <!-- GPT - Supported -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-green-500 to-green-600"
-            >
-              <span class="text-xs font-bold text-white">G</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">GPT</span>
-            <span
-              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
-              >{{ t('home.providers.supported') }}</span
-            >
+          <div class="flex items-center gap-2.5 rounded-xl border border-accent-200 bg-white px-4 py-2.5 dark:border-[#2a435e] dark:bg-dark-800">
+            <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-accent-500 text-xs font-bold text-white">G</div>
+            <span class="text-sm font-semibold text-[#252b3b] dark:text-dark-100">GPT</span>
+            <span class="badge badge-sky !py-0 text-[10px]">{{ t('home.providers.supported') }}</span>
           </div>
           <!-- Gemini - Supported -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-blue-600"
-            >
-              <span class="text-xs font-bold text-white">G</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.gemini') }}</span>
-            <span
-              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
-              >{{ t('home.providers.supported') }}</span
-            >
+          <div class="flex items-center gap-2.5 rounded-xl border border-accent-200 bg-white px-4 py-2.5 dark:border-[#2a435e] dark:bg-dark-800">
+            <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-accent-500 text-xs font-bold text-white">G</div>
+            <span class="text-sm font-semibold text-[#252b3b] dark:text-dark-100">{{ t('home.providers.gemini') }}</span>
+            <span class="badge badge-sky !py-0 text-[10px]">{{ t('home.providers.supported') }}</span>
           </div>
           <!-- Antigravity - Supported -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-rose-500 to-pink-600"
-            >
-              <span class="text-xs font-bold text-white">A</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.antigravity') }}</span>
-            <span
-              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
-              >{{ t('home.providers.supported') }}</span
-            >
+          <div class="flex items-center gap-2.5 rounded-xl border border-primary-200 bg-white px-4 py-2.5 dark:border-[#4d2c3e] dark:bg-dark-800">
+            <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-500 text-xs font-bold text-white">A</div>
+            <span class="text-sm font-semibold text-[#252b3b] dark:text-dark-100">{{ t('home.providers.antigravity') }}</span>
+            <span class="badge badge-primary !py-0 text-[10px]">{{ t('home.providers.supported') }}</span>
           </div>
           <!-- More - Coming Soon -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-gray-200/50 bg-white/40 px-5 py-3 opacity-60 backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/40"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-gray-500 to-gray-600"
-            >
-              <span class="text-xs font-bold text-white">+</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.more') }}</span>
-            <span
-              class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500 dark:bg-dark-700 dark:text-dark-400"
-              >{{ t('home.providers.soon') }}</span
-            >
+          <div class="flex items-center gap-2.5 rounded-xl border border-[#e6edf5] bg-white px-4 py-2.5 opacity-75 dark:border-dark-700 dark:bg-dark-800">
+            <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-[#e6edf5] text-xs font-bold text-[#5d677e] dark:bg-dark-700 dark:text-dark-300">+</div>
+            <span class="text-sm font-semibold text-[#5d677e] dark:text-dark-300">{{ t('home.providers.more') }}</span>
+            <span class="badge badge-gray !py-0 text-[10px]">{{ t('home.providers.soon') }}</span>
           </div>
         </div>
       </div>
     </main>
 
     <!-- Footer -->
-    <footer class="relative z-10 border-t border-gray-200/50 px-6 py-8 dark:border-dark-800/50">
+    <footer class="relative z-10 border-t border-[#e6edf5] bg-white px-6 py-6 dark:border-dark-700 dark:bg-dark-800">
       <div
         class="mx-auto flex max-w-6xl flex-col items-center justify-center gap-4 text-center sm:flex-row sm:text-left"
       >
-        <p class="text-sm text-gray-500 dark:text-dark-400">
+        <p class="text-xs text-[#929cb3] dark:text-dark-400">
           &copy; {{ currentYear }} {{ siteName }}. {{ t('home.footer.allRightsReserved') }}
         </p>
         <div class="flex items-center gap-4">
@@ -475,7 +403,7 @@
             :href="docUrl"
             target="_blank"
             rel="noopener noreferrer"
-            class="text-sm text-gray-500 transition-colors hover:text-gray-700 dark:text-dark-400 dark:hover:text-white"
+            class="text-xs text-[#5d677e] transition-colors hover:text-primary-600 dark:text-dark-400 dark:hover:text-white"
           >
             {{ t('home.docs') }}
           </a>
@@ -483,7 +411,7 @@
             :href="githubUrl"
             target="_blank"
             rel="noopener noreferrer"
-            class="text-sm text-gray-500 transition-colors hover:text-gray-700 dark:text-dark-400 dark:hover:text-white"
+            class="text-xs text-[#5d677e] transition-colors hover:text-accent-600 dark:text-dark-400 dark:hover:text-white"
           >
             GitHub
           </a>
@@ -587,52 +515,45 @@ onMounted(() => {
   display: inline-block;
 }
 
-/* Terminal Window */
+/* Terminal Window - 简约纯白卡片 + 浅蓝顶栏 */
 .terminal-window {
   width: 420px;
-  background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%);
-  border-radius: 14px;
-  box-shadow:
-    0 25px 50px -12px rgba(0, 0, 0, 0.4),
-    0 0 0 1px rgba(255, 255, 255, 0.1),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  max-width: 100%;
+  background: #ffffff;
+  border: 1px solid #e6edf5;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(37, 43, 59, 0.05);
   overflow: hidden;
-  transform: perspective(1000px) rotateX(2deg) rotateY(-2deg);
-  transition: transform 0.3s ease;
-}
-
-.terminal-window:hover {
-  transform: perspective(1000px) rotateX(0deg) rotateY(0deg) translateY(-4px);
 }
 
 /* Terminal Header */
 .terminal-header {
   display: flex;
   align-items: center;
-  padding: 12px 16px;
-  background: rgba(30, 41, 59, 0.8);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 10px 14px;
+  background: #eef8ff;
+  border-bottom: 1px solid #e6edf5;
 }
 
 .terminal-buttons {
   display: flex;
-  gap: 8px;
+  gap: 6px;
 }
 
 .terminal-buttons span {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
 }
 
 .btn-close {
-  background: #ef4444;
+  background: #f4729b;
 }
 .btn-minimize {
-  background: #eab308;
+  background: #5eb5f7;
 }
 .btn-maximize {
-  background: #22c55e;
+  background: #d5e0ec;
 }
 
 .terminal-title {
@@ -640,16 +561,17 @@ onMounted(() => {
   text-align: center;
   font-size: 12px;
   font-family: ui-monospace, monospace;
-  color: #64748b;
-  margin-right: 52px;
+  color: #5d677e;
+  margin-right: 42px;
 }
 
 /* Terminal Body */
 .terminal-body {
-  padding: 20px 24px;
+  padding: 18px 20px;
   font-family: ui-monospace, 'Fira Code', monospace;
-  font-size: 14px;
-  line-height: 2;
+  font-size: 13px;
+  line-height: 1.9;
+  color: #252b3b;
 }
 
 .code-line {
@@ -686,39 +608,40 @@ onMounted(() => {
 }
 
 .code-prompt {
-  color: #22c55e;
+  color: #d64576;
   font-weight: bold;
 }
 .code-cmd {
-  color: #38bdf8;
+  color: #2084d4;
 }
 .code-flag {
-  color: #a78bfa;
+  color: #5d677e;
 }
 .code-url {
-  color: #14b8a6;
+  color: #d64576;
 }
 .code-comment {
-  color: #64748b;
+  color: #929cb3;
   font-style: italic;
 }
 .code-success {
-  color: #22c55e;
-  background: rgba(34, 197, 94, 0.15);
-  padding: 2px 8px;
-  border-radius: 4px;
+  color: #059669;
+  background: #ecfdf5;
+  border: 1px solid #bbf7d0;
+  padding: 1px 7px;
+  border-radius: 6px;
   font-weight: 600;
 }
 .code-response {
-  color: #fbbf24;
+  color: #252b3b;
 }
 
 /* Blinking Cursor */
 .cursor {
   display: inline-block;
-  width: 8px;
-  height: 16px;
-  background: #22c55e;
+  width: 7px;
+  height: 15px;
+  background: #f4729b;
   animation: blink 1s step-end infinite;
 }
 
@@ -734,11 +657,32 @@ onMounted(() => {
 }
 
 /* Dark mode adjustments */
-:deep(.dark) .terminal-window {
-  box-shadow:
-    0 25px 50px -12px rgba(0, 0, 0, 0.6),
-    0 0 0 1px rgba(20, 184, 166, 0.2),
-    0 0 40px rgba(20, 184, 166, 0.1),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+:global(.dark) .terminal-window {
+  background: #1b1f2e;
+  border-color: #2a3147;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+}
+:global(.dark) .terminal-header {
+  background: #1a293a;
+  border-bottom-color: #2a3147;
+}
+:global(.dark) .terminal-title {
+  color: #a5b0c7;
+}
+:global(.dark) .terminal-body,
+:global(.dark) .code-response {
+  color: #eef2fa;
+}
+:global(.dark) .code-prompt,
+:global(.dark) .code-url {
+  color: #ff9bbd;
+}
+:global(.dark) .code-cmd {
+  color: #8ad0ff;
+}
+:global(.dark) .code-success {
+  color: #6ee7b7;
+  background: #142c24;
+  border-color: #1f4d3d;
 }
 </style>

@@ -22,8 +22,8 @@
 .driver-active-element {
   position: relative !important;
   z-index: 99999999 !important;
-  outline: 4px solid rgba(20, 184, 166, 0.2) !important;
-  border-radius: 4px !important;
+  outline: 4px solid rgba(244, 114, 155, 0.22) !important;
+  border-radius: 6px !important;
 }
 
 /* 2. Popover Container */
@@ -31,20 +31,20 @@
   position: fixed !important;
   z-index: 100000000 !important;
   background-color: #ffffff !important;
-  border: 1px solid #e5e7eb !important;
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04) !important;
+  border: 1px solid #e6edf5 !important;
+  box-shadow: 0 8px 24px rgba(37, 43, 59, 0.08) !important;
   border-radius: 12px !important;
   padding: 0 !important;
   max-width: min(440px, 90vw) !important; /* Responsive on small screens */
-  color: #1f2937 !important;
-  font-family: ui-sans-serif, system-ui, sans-serif !important;
+  color: #252b3b !important;
+  font-family: 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif !important;
   overflow: hidden !important;
 }
 
 .dark .driver-popover.theme-tour-popover {
-  background-color: #1e293b !important;
-  border-color: #334155 !important;
-  color: #f3f4f6 !important;
+  background-color: #1b1f2e !important;
+  border-color: #2a3147 !important;
+  color: #eef2fa !important;
 }
 
 /* 3. Header Area */
@@ -197,11 +197,11 @@
 }
 
 .theme-tour-popover .driver-popover-next-btn {
-  background-color: #14b8a6 !important;
+  background-color: #f4729b !important;
   color: #ffffff !important;
-  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05) !important;
+  box-shadow: none !important;
 }
-.theme-tour-popover .driver-popover-next-btn:hover { background-color: #0d9488 !important; }
+.theme-tour-popover .driver-popover-next-btn:hover { background-color: #e55b87 !important; }
 
 .theme-tour-popover .driver-popover-prev-btn {
   background-color: white !important;

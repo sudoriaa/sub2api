@@ -11,7 +11,7 @@
       <!-- Custom Logo or Default Logo -->
       <router-link
         :to="homePath"
-        class="sidebar-logo flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl shadow-glow transition-opacity hover:opacity-80"
+        class="sidebar-logo flex h-8 w-8 items-center justify-center overflow-hidden rounded-lg transition-opacity hover:opacity-85"
         @click="handleMenuItemClick(homePath)"
       >
         <img v-if="settingsLoaded" :src="siteLogo || '/logo.svg'" alt="Logo" class="h-full w-full object-contain" />
@@ -19,7 +19,7 @@
       <div class="sidebar-brand" :class="{ 'sidebar-brand-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">
         <router-link
           :to="homePath"
-          class="sidebar-brand-title text-lg font-bold text-gray-900 transition-colors hover:text-primary-600 dark:text-white dark:hover:text-primary-400"
+          class="sidebar-brand-title text-base font-bold text-[#252b3b] transition-colors hover:text-primary-600 dark:text-white dark:hover:text-[#ff9bbd]"
           @click="handleMenuItemClick(homePath)"
         >
           {{ siteName }}
@@ -80,7 +80,7 @@
                 </span>
               </button>
               <!-- Children -->
-              <div v-if="!sidebarCollapsed && isGroupExpanded(item)" class="mb-1 ml-4 border-l border-gray-200 pl-2 dark:border-dark-600">
+              <div v-if="!sidebarCollapsed && isGroupExpanded(item)" class="mb-1 ml-4 border-l border-primary-200 pl-2 dark:border-dark-600">
                 <div v-for="child in item.children" :key="child.path" class="relative">
                   <router-link
                     :to="child.path"
@@ -191,7 +191,7 @@
     </nav>
 
     <!-- Bottom Section -->
-    <div class="mt-auto border-t border-gray-100 p-3 dark:border-dark-800">
+    <div class="mt-auto border-t border-[#e6edf5] p-3 dark:border-dark-700">
       <!-- Theme Toggle -->
       <button
         @click="toggleTheme"
@@ -1232,8 +1232,8 @@ onBeforeUnmount(() => {
   min-width: 1.25rem;
   height: 1.25rem;
   padding: 0 0.375rem;
-  border-radius: 9999px;
-  background: rgb(239 68 68);
+  border-radius: 6px;
+  background: #f4729b;
   color: white;
   font-size: 0.6875rem;
   font-weight: 600;

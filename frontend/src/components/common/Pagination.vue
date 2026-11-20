@@ -1,6 +1,6 @@
 <template>
   <div
-    class="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 dark:border-dark-700 dark:bg-dark-800 sm:px-6"
+    class="flex items-center justify-between rounded-xl border border-[#e6edf5] bg-white px-4 py-3 dark:border-dark-700 dark:bg-dark-800 sm:px-5"
   >
     <div class="flex flex-1 items-center justify-between sm:hidden">
       <!-- Mobile pagination -->
@@ -69,17 +69,17 @@
 
       <!-- Desktop pagination buttons -->
       <nav
-        class="relative z-0 inline-flex -space-x-px rounded-md shadow-sm"
+        class="relative z-0 inline-flex items-center gap-1"
         aria-label="Pagination"
       >
         <!-- Previous button -->
         <button
           @click="goToPage(page - 1)"
           :disabled="page === 1"
-          class="relative inline-flex items-center rounded-l-md border border-gray-300 bg-white px-2 py-2 text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-dark-600 dark:bg-dark-700 dark:text-gray-400 dark:hover:bg-dark-600"
+          class="relative inline-flex items-center rounded-lg border border-[#d5e0ec] bg-white px-2.5 py-1.5 text-xs font-semibold text-[#5d677e] hover:border-accent-200 hover:bg-accent-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-dark-600 dark:bg-dark-800 dark:text-dark-300 dark:hover:bg-dark-700"
           :aria-label="t('pagination.previous')"
         >
-          <Icon name="chevronLeft" size="md" />
+          <Icon name="chevronLeft" size="sm" />
         </button>
 
         <!-- Page numbers -->
@@ -89,11 +89,11 @@
           @click="typeof pageNum === 'number' && goToPage(pageNum)"
           :disabled="typeof pageNum !== 'number'"
           :class="[
-            'relative inline-flex items-center border px-4 py-2 text-sm font-medium',
+            'relative inline-flex items-center rounded-lg border px-3 py-1.5 text-xs font-semibold tabular-nums transition-colors',
             pageNum === page
-              ? 'z-10 border-primary-500 bg-primary-50 text-primary-600 dark:bg-primary-900/30 dark:text-primary-400'
-              : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-dark-600 dark:bg-dark-700 dark:text-gray-300 dark:hover:bg-dark-600',
-            typeof pageNum !== 'number' && 'cursor-default'
+              ? 'z-10 border-primary-500 bg-primary-500 text-white'
+              : 'border-[#d5e0ec] bg-white text-[#252b3b] hover:border-accent-200 hover:bg-accent-50 dark:border-dark-600 dark:bg-dark-800 dark:text-dark-200 dark:hover:bg-dark-700',
+            typeof pageNum !== 'number' && 'cursor-default border-transparent bg-transparent'
           ]"
           :aria-label="
             typeof pageNum === 'number' ? t('pagination.goToPage', { page: pageNum }) : undefined
@@ -107,10 +107,10 @@
         <button
           @click="goToPage(page + 1)"
           :disabled="page === totalPages"
-          class="relative inline-flex items-center rounded-r-md border border-gray-300 bg-white px-2 py-2 text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-dark-600 dark:bg-dark-700 dark:text-gray-400 dark:hover:bg-dark-600"
+          class="relative inline-flex items-center rounded-lg border border-[#d5e0ec] bg-white px-2.5 py-1.5 text-xs font-semibold text-[#5d677e] hover:border-accent-200 hover:bg-accent-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-dark-600 dark:bg-dark-800 dark:text-dark-300 dark:hover:bg-dark-700"
           :aria-label="t('pagination.next')"
         >
-          <Icon name="chevronRight" size="md" />
+          <Icon name="chevronRight" size="sm" />
         </button>
       </nav>
     </div>

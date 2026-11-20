@@ -1,11 +1,8 @@
 <template>
   <div class="stat-card">
-    <div :class="['stat-icon', iconClass]">
-      <component v-if="icon" :is="icon" class="h-6 w-6" aria-hidden="true" />
-    </div>
     <div class="min-w-0 flex-1">
       <p class="stat-label truncate">{{ title }}</p>
-      <div class="mt-1 flex items-baseline gap-2">
+      <div class="mt-1.5 flex items-baseline gap-2">
         <p class="stat-value" :title="String(formattedValue)">{{ formattedValue }}</p>
         <span v-if="change !== undefined" :class="['stat-trend', trendClass]">
           <Icon
@@ -17,6 +14,9 @@
           {{ formattedChange }}
         </span>
       </div>
+    </div>
+    <div :class="['stat-icon', iconClass]">
+      <component v-if="icon" :is="icon" class="h-5 w-5" aria-hidden="true" />
     </div>
   </div>
 </template>
