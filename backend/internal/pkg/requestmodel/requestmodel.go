@@ -51,8 +51,7 @@ func FromBodyCandidates(routePath, contentType string, body []byte) []string {
 		topLevel = models
 		session = sessionModelCandidates(sessions)
 	} else {
-		topLevel = jsonModelCandidates(body)
-		session = jsonSessionModelCandidates(body)
+		topLevel, session = jsonBodyModelCandidates(body)
 	}
 
 	if IsLiveRequestRoute(routePath) {
@@ -118,37 +117,33 @@ func jsonModelWithPaths(body []byte, paths []string) (string, string) {
 	return "", ""
 }
 
-// jsonModelCandidates 返回顶层所有键名大小写不敏感等于 "model" 的字符串值，
-// 按出现顺序保留重复（覆盖 gjson 首 matches 与 encoding/json 末值绑定两类解析器）。
-func jsonModelCandidates(body []byte) []string {
-	var out []string
+// jsonBodyModelCandidates visits the top level only once. Keep ForEach's
+// permissive handling of partial JSON: admission and routing must continue to
+// see every model that downstream parsers could extract.
+func jsonBodyModelCandidates(body []byte) (topLevel, session []string) {
 	gjson.ParseBytes(body).ForEach(func(key, value gjson.Result) bool {
-		if value.Type == gjson.String && strings.EqualFold(key.String(), "model") {
-			if trimmed := strings.TrimSpace(value.String()); trimmed != "" {
-				out = append(out, trimmed)
-			}
+		if strings.EqualFold(key.String(), "session") {
+			session = appendObjectModels(session, value)
+		} else {
+			topLevel = appendModelCandidate(topLevel, key, value)
 		}
 		return true
 	})
+	return topLevel, session
+}
+
+func appendModelCandidate(out []string, key, value gjson.Result) []string {
+	if value.Type == gjson.String && strings.EqualFold(key.String(), "model") {
+		if model := strings.TrimSpace(value.String()); model != "" {
+			return append(out, model)
+		}
+	}
 	return out
 }
 
-// jsonSessionModelCandidates 返回每个顶层 "session"（大小写不敏感）对象内
-// 所有键名大小写不敏感等于 "model" 的字符串值。
-func jsonSessionModelCandidates(body []byte) []string {
-	var out []string
-	gjson.ParseBytes(body).ForEach(func(key, value gjson.Result) bool {
-		if !strings.EqualFold(key.String(), "session") {
-			return true
-		}
-		value.ForEach(func(sessionKey, sessionValue gjson.Result) bool {
-			if sessionValue.Type == gjson.String && strings.EqualFold(sessionKey.String(), "model") {
-				if trimmed := strings.TrimSpace(sessionValue.String()); trimmed != "" {
-					out = append(out, trimmed)
-				}
-			}
-			return true
-		})
+func appendObjectModels(out []string, obj gjson.Result) []string {
+	obj.ForEach(func(key, value gjson.Result) bool {
+		out = appendModelCandidate(out, key, value)
 		return true
 	})
 	return out
@@ -158,7 +153,7 @@ func jsonSessionModelCandidates(body []byte) []string {
 func sessionModelCandidates(rawSessions []string) []string {
 	var out []string
 	for _, raw := range rawSessions {
-		out = append(out, jsonModelCandidates([]byte(raw))...)
+		out = appendObjectModels(out, gjson.Parse(raw))
 	}
 	return out
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -692,9 +693,95 @@ func (r *usageLogRepository) batchInsertUsageLogs(db *sql.DB, keys []string, pre
 	return insertedMap, stateMap, false, nil
 }
 
+type usageLogInsertMode uint8
+
+const (
+	usageLogIndexed usageLogInsertMode = iota
+	usageLogBestEffort
+)
+
+// SQL contains only placeholders. Keep one immutable string per supported
+// mode and standard batch size; never retain prepared rows or argument slices.
+var usageLogBatchSQL [2][usageLogBestEffortBatchMaxSize]struct {
+	once sync.Once
+	text string
+}
+
 func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usageLogInsertPrepared) (string, []any) {
+	return buildUsageLogInsertQuery(usageLogIndexed, len(keys), func(i int) []any {
+		return preparedByKey[keys[i]].args
+	})
+}
+
+func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (string, []any) {
+	return buildUsageLogInsertQuery(usageLogBestEffort, len(preparedList), func(i int) []any {
+		return preparedList[i].args
+	})
+}
+
+func buildUsageLogInsertQuery(mode usageLogInsertMode, rows int, rowArgs func(int) []any) (string, []any) {
+	width := len(usageLogInsertArgTypes)
+	if mode == usageLogIndexed {
+		width++ // synthetic input_idx
+	}
+	args := make([]any, 0, rows*width)
+	standard := true
+	for i := 0; i < rows; i++ {
+		row := rowArgs(i)
+		standard = standard && len(row) == len(usageLogInsertArgTypes)
+		if mode == usageLogIndexed {
+			args = append(args, i)
+		}
+		args = append(args, row...)
+	}
+
+	if standard && rows > 0 && rows <= usageLogBestEffortBatchMaxSize {
+		slot := &usageLogBatchSQL[mode][rows-1]
+		slot.once.Do(func() {
+			slot.text = usageLogInsertSQL(mode, rows, func(int) int { return len(usageLogInsertArgTypes) })
+		})
+		return slot.text, args
+	}
+	return usageLogInsertSQL(mode, rows, func(i int) int { return len(rowArgs(i)) }), args
+}
+
+func usageLogInsertSQL(mode usageLogInsertMode, rows int, width func(int) int) string {
+	prefix, suffix := usageLogBestEffortSQLPrefix, usageLogBestEffortSQLSuffix
+	if mode == usageLogIndexed {
+		prefix, suffix = usageLogIndexedSQLPrefix, usageLogIndexedSQLSuffix
+	}
 	var query strings.Builder
-	_, _ = query.WriteString(`
+	query.WriteString(prefix)
+	pos := 1
+	for row := 0; row < rows; row++ {
+		if row != 0 {
+			query.WriteByte(',')
+		}
+		query.WriteByte('(')
+		if mode == usageLogIndexed {
+			query.WriteByte('$')
+			query.WriteString(strconv.Itoa(pos))
+			pos++
+		}
+		for col := range width(row) {
+			if mode == usageLogIndexed || col > 0 {
+				query.WriteByte(',')
+			}
+			query.WriteByte('$')
+			query.WriteString(strconv.Itoa(pos))
+			if col < len(usageLogInsertArgTypes) {
+				query.WriteString("::")
+				query.WriteString(usageLogInsertArgTypes[col])
+			}
+			pos++
+		}
+		query.WriteByte(')')
+	}
+	query.WriteString(suffix)
+	return query.String()
+}
+
+const usageLogIndexedSQLPrefix = `
 		WITH input (
 			input_idx,
 			user_id,
@@ -765,36 +852,9 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			queue_timing,
 			platform,
 			customer_cost_details
-		) AS (VALUES `)
+		) AS (VALUES `
 
-	// Each batch row prepends the synthetic input_index before the 61
-	// usage-log column values.
-	args := make([]any, 0, len(keys)*62)
-	argPos := 1
-	for idx, key := range keys {
-		if idx > 0 {
-			_, _ = query.WriteString(",")
-		}
-		_, _ = query.WriteString("(")
-		_, _ = query.WriteString("$")
-		_, _ = query.WriteString(strconv.Itoa(argPos))
-		args = append(args, idx)
-		argPos++
-		prepared := preparedByKey[key]
-		for i := 0; i < len(prepared.args); i++ {
-			_, _ = query.WriteString(",")
-			_, _ = query.WriteString("$")
-			_, _ = query.WriteString(strconv.Itoa(argPos))
-			if i < len(usageLogInsertArgTypes) {
-				_, _ = query.WriteString("::")
-				_, _ = query.WriteString(usageLogInsertArgTypes[i])
-			}
-			argPos++
-		}
-		_, _ = query.WriteString(")")
-		args = append(args, prepared.args...)
-	}
-	_, _ = query.WriteString(`
+const usageLogIndexedSQLSuffix = `
 		),
 		inserted AS (
 			INSERT INTO usage_logs (
@@ -970,13 +1030,9 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			'[]'::json
 		)
 		FROM resolved
-	`)
-	return query.String(), args
-}
+	`
 
-func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (string, []any) {
-	var query strings.Builder
-	_, _ = query.WriteString(`
+const usageLogBestEffortSQLPrefix = `
 		WITH input (
 			user_id,
 			api_key_id,
@@ -1046,32 +1102,9 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			queue_timing,
 			platform,
 			customer_cost_details
-		) AS (VALUES `)
+		) AS (VALUES `
 
-	args := make([]any, 0, len(preparedList)*60)
-	argPos := 1
-	for idx, prepared := range preparedList {
-		if idx > 0 {
-			_, _ = query.WriteString(",")
-		}
-		_, _ = query.WriteString("(")
-		for i := 0; i < len(prepared.args); i++ {
-			if i > 0 {
-				_, _ = query.WriteString(",")
-			}
-			_, _ = query.WriteString("$")
-			_, _ = query.WriteString(strconv.Itoa(argPos))
-			if i < len(usageLogInsertArgTypes) {
-				_, _ = query.WriteString("::")
-				_, _ = query.WriteString(usageLogInsertArgTypes[i])
-			}
-			argPos++
-		}
-		_, _ = query.WriteString(")")
-		args = append(args, prepared.args...)
-	}
-
-	_, _ = query.WriteString(`
+const usageLogBestEffortSQLSuffix = `
 		)
 		INSERT INTO usage_logs (
 			user_id,
@@ -1214,10 +1247,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			customer_cost_details
 		FROM input
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
-	`)
-
-	return query.String(), args
-}
+	`
 
 func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared usageLogInsertPrepared) error {
 	_, err := sqlq.ExecContext(ctx, `

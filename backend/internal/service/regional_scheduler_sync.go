@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/regional"
@@ -53,6 +54,14 @@ func RegionalSchedulerValidator(allowedIDs []int64) regional.PayloadValidator {
 	}
 }
 func decodeRegionalScheduler(payload []byte) (RegionalSchedulerDocument, error) {
+	doc, err := parseRegionalScheduler(payload)
+	if err == nil {
+		err = validateRegionalScheduler(doc)
+	}
+	return doc, err
+}
+
+func parseRegionalScheduler(payload []byte) (RegionalSchedulerDocument, error) {
 	var doc RegionalSchedulerDocument
 	if len(payload) > regional.MaxSyncBytes/2 {
 		return doc, errors.New("regional scheduler payload too large")
@@ -66,13 +75,17 @@ func decodeRegionalScheduler(payload []byte) (RegionalSchedulerDocument, error) 
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return doc, errors.New("trailing regional scheduler data")
 	}
+	return doc, nil
+}
+
+func validateRegionalScheduler(doc RegionalSchedulerDocument) error {
 	if doc.Version != 1 || doc.Buckets == nil || len(doc.Buckets) > 4096 {
-		return doc, errors.New("invalid regional scheduler version or buckets")
+		return errors.New("invalid regional scheduler version or buckets")
 	}
 	groups := make(map[int64]bool, len(doc.Groups))
 	for _, g := range doc.Groups {
 		if g == nil || g.ID <= 0 || groups[g.ID] {
-			return doc, errors.New("invalid regional group")
+			return errors.New("invalid regional group")
 		}
 		groups[g.ID] = true
 	}
@@ -83,31 +96,26 @@ func decodeRegionalScheduler(payload []byte) (RegionalSchedulerDocument, error) 
 	for _, entry := range doc.Buckets {
 		b := entry.Bucket
 		if b.GroupID < 0 || b.Platform == "" || (b.Mode != SchedulerModeSingle && b.Mode != SchedulerModeForced && b.Mode != SchedulerModeMixed) || seen[b] || entry.Accounts == nil {
-			return doc, errors.New("invalid regional scheduler bucket")
+			return errors.New("invalid regional scheduler bucket")
 		}
 		if b.Mode == SchedulerModeMixed && b.Platform != PlatformAnthropic && b.Platform != PlatformGemini {
-			return doc, errors.New("unsupported mixed scheduler bucket")
+			return errors.New("unsupported mixed scheduler bucket")
 		}
 		seen[b] = true
 		if b.GroupID > 0 && len(entry.Accounts) > 0 && !groups[b.GroupID] {
-			return doc, errors.New("regional bucket missing group policy")
+			return errors.New("regional bucket missing group policy")
 		}
 		ids := make(map[int64]bool, len(entry.Accounts))
 		for _, a := range entry.Accounts {
 			if a == nil || a.ID <= 0 || ids[a.ID] || a.ParentAccountID != nil {
-				return doc, errors.New("invalid or unsupported regional account")
+				return errors.New("invalid or unsupported regional account")
 			}
 			ids[a.ID] = true
-			encoded, err := json.Marshal(a)
-			if err != nil {
-				return doc, errors.New("invalid regional account encoding")
+			if err := checkRegionalAccountView(accountViews, a); err != nil {
+				return err
 			}
-			if previous, ok := accountViews[a.ID]; ok && !bytes.Equal(previous, encoded) {
-				return doc, errors.New("conflicting regional account views")
-			}
-			accountViews[a.ID] = encoded
 			if a.Platform != b.Platform && (b.Mode != SchedulerModeMixed || a.Platform != PlatformAntigravity || !a.IsMixedSchedulingEnabled()) {
-				return doc, errors.New("regional account platform mismatch")
+				return errors.New("regional account platform mismatch")
 			}
 			if b.GroupID > 0 {
 				member := false
@@ -117,18 +125,59 @@ func decodeRegionalScheduler(payload []byte) (RegionalSchedulerDocument, error) 
 					}
 				}
 				if !member {
-					return doc, errors.New("regional account group mismatch")
+					return errors.New("regional account group mismatch")
 				}
 			}
 		}
 	}
-	return doc, nil
+	return nil
+}
+
+func checkRegionalAccountView(views map[int64][]byte, a *Account) error {
+	encoded, err := json.Marshal(a)
+	if err != nil {
+		return errors.New("invalid regional account encoding")
+	}
+	if previous, ok := views[a.ID]; ok && !bytes.Equal(previous, encoded) {
+		return errors.New("conflicting regional account views")
+	}
+	views[a.ID] = encoded
+	return nil
 }
 
 // RegionalSchedulerReader reads one atomic full-stream view per request. It
 // never makes network/DB calls. Replica.Current also gates failed persistence,
 // missing state and expiry, so no separately cached view can outlive revocation.
-type RegionalSchedulerReader struct{ replica *regional.Replica }
+type RegionalSchedulerReader struct {
+	replica interface {
+		Current() (regional.Snapshot, error)
+	}
+	validated atomic.Pointer[regionalSchedulerValidation]
+}
+
+type regionalSchedulerValidation struct {
+	revision      uint64
+	payloadSHA256 string
+}
+
+// Current authenticates the revision/digest pair. Cache only the fact that
+// these bytes passed validation, never decoded account credentials or groups.
+// A reader overtaken by a publish may evict a newer memo; that just causes
+// another validation, never use of a different revision's result.
+func (r *RegionalSchedulerReader) decodeSnapshot(snapshot regional.Snapshot) (RegionalSchedulerDocument, error) {
+	doc, err := parseRegionalScheduler(snapshot.Payload)
+	if err != nil {
+		return doc, err
+	}
+	key := regionalSchedulerValidation{revision: snapshot.Revision, payloadSHA256: snapshot.PayloadSHA256}
+	if last := r.validated.Load(); last == nil || *last != key {
+		if err := validateRegionalScheduler(doc); err != nil {
+			return doc, err
+		}
+		r.validated.Store(&key)
+	}
+	return doc, nil
+}
 
 func NewRegionalSchedulerReader(replica *regional.Replica) (*RegionalSchedulerReader, error) {
 	if replica == nil {
@@ -147,7 +196,7 @@ func (r *RegionalSchedulerReader) GetLocalSnapshot(ctx context.Context, bucket S
 	if snapshot.Kind != regional.SnapshotScheduler {
 		return nil, false, ErrLocalSchedulerSnapshotUnavailable
 	}
-	doc, err := decodeRegionalScheduler(snapshot.Payload)
+	doc, err := r.decodeSnapshot(snapshot)
 	if err != nil {
 		return nil, false, err
 	}
@@ -303,7 +352,7 @@ func (r *RegionalSchedulerReader) detailView(ctx context.Context) (RegionalSched
 	if snapshot.Kind != regional.SnapshotScheduler {
 		return RegionalSchedulerDocument{}, time.Time{}, ErrLocalSchedulerSnapshotUnavailable
 	}
-	doc, err := decodeRegionalScheduler(snapshot.Payload)
+	doc, err := r.decodeSnapshot(snapshot)
 	return doc, snapshot.ExpiresAt, err
 }
 func regionalReadFinished(ctx context.Context, expiry time.Time) error {

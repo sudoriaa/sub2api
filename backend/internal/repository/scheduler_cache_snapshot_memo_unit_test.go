@@ -1006,3 +1006,55 @@ func TestSchedulerCacheSnapshotMemoCoalescesBackgroundGlobalRevisionWrites(t *te
 func ptrAccount(account service.Account) *service.Account {
 	return &account
 }
+
+func TestSchedulerCacheSnapshotMemoExistsUsesDecodedIDs(t *testing.T) {
+	cache, mr, recorder := newSchedulerCacheMemoUnit(t, 2)
+	cache.mgetChunkSize = 2
+	bucket := memoTestBucket(301)
+	memoPublish(t, cache, bucket, memoTestAccount(1, "a"), memoTestAccount(2, "b"), memoTestAccount(3, "c"))
+	// A metadata record whose ID differs from the ZSET member: a warm EXISTS
+	// uses the decoded ID, whereas last_used must still use the member ID.
+	raw, err := mr.Get(schedulerAccountMetaKey("3"))
+	require.NoError(t, err)
+	var mismatched service.Account
+	require.NoError(t, json.Unmarshal([]byte(raw), &mismatched))
+	mismatched.ID = 103
+	encoded, err := json.Marshal(&mismatched)
+	require.NoError(t, err)
+	require.NoError(t, mr.Set(schedulerAccountMetaKey("3"), string(encoded)))
+	require.Equal(t, []int64{1, 2, 103}, memoIDs(memoRead(t, cache, bucket)))
+	recorder.reset()
+	memoRequireMiss(t, cache, bucket)
+	batches := recorder.pipelineBatches()
+	require.Len(t, batches, 3)
+	require.Equal(t, []string{"exists " + schedulerAccountMetaKey("1"), "mget " + schedulerLastUsedKey("1")}, batches[1])
+	require.Equal(t, []string{"exists " + schedulerAccountMetaKey("103"), "mget " + schedulerLastUsedKey("3")}, batches[2])
+}
+
+func BenchmarkSchedulerCacheWarmSnapshot(b *testing.B) {
+	mr := miniredis.RunT(b)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	b.Cleanup(func() { _ = rdb.Close() })
+	cache := newSchedulerCacheWithChunkSizes(rdb, 16, 32).(*schedulerCache)
+	now := time.Now()
+	cache.now = func() time.Time { return now } // measure warm reads only
+	ctx := b.Context()
+	bucket := memoTestBucket(301)
+	rows := make([]service.Account, 64)
+	for i := range rows {
+		rows[i] = memoTestAccount(int64(i+101), "bench")
+	}
+	token, err := cache.CaptureBucketWriteToken(ctx, bucket)
+	require.NoError(b, err)
+	require.NoError(b, cache.SetSnapshot(ctx, bucket, token, rows))
+	_, hit, err := cache.GetSnapshot(ctx, bucket)
+	require.NoError(b, err)
+	require.True(b, hit)
+	b.ReportAllocs()
+	for b.Loop() {
+		accounts, hit, err := cache.GetSnapshot(ctx, bucket)
+		if err != nil || !hit || len(accounts) != len(rows) {
+			b.Fatalf("warm read: hit=%t, err=%v", hit, err)
+		}
+	}
+}

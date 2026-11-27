@@ -275,6 +275,7 @@ type schedulerSnapshotEntry struct {
 	revisions    []string
 	loadedAt     time.Time
 	accounts     []*service.Account
+	metaKeys     []string
 	lastUsedKeys []string
 }
 
@@ -404,7 +405,10 @@ func (c *schedulerCache) GetSnapshot(ctx context.Context, bucket service.Schedul
 		masters = append(masters, account)
 	}
 	// 母本发布进缓存前由本 goroutine 完成预处理，发布后只读。
-	for _, master := range masters {
+	// Warm EXISTS checks use decoded account IDs, not ZSET member strings.
+	metaKeys := make([]string, len(masters))
+	for i, master := range masters {
+		metaKeys[i] = schedulerAccountMetaKey(strconv.FormatInt(master.ID, 10))
 		master.PrepareSharedSnapshot()
 	}
 
@@ -415,6 +419,7 @@ func (c *schedulerCache) GetSnapshot(ctx context.Context, bucket service.Schedul
 		revisions:    revisions,
 		loadedAt:     now,
 		accounts:     masters,
+		metaKeys:     metaKeys,
 		lastUsedKeys: lastUsedKeys,
 	}
 	c.storeSnapshotEntry(bucketKey, entry)
@@ -446,12 +451,8 @@ func (c *schedulerCache) snapshotAccountsFromEntry(ctx context.Context, entry *s
 	}
 	for start := 0; start < len(entry.accounts); start += chunkSize {
 		end := min(start+chunkSize, len(entry.accounts))
-		keys := make([]string, 0, end-start)
-		for _, account := range entry.accounts[start:end] {
-			keys = append(keys, schedulerAccountMetaKey(strconv.FormatInt(account.ID, 10)))
-		}
 		pipe := c.rdb.Pipeline()
-		exists := pipe.Exists(ctx, keys...)
+		exists := pipe.Exists(ctx, entry.metaKeys[start:end]...)
 		lastUsed := pipe.MGet(ctx, entry.lastUsedKeys[start:end]...)
 		if _, err := pipe.Exec(ctx); err != nil {
 			return nil, err
