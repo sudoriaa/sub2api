@@ -42,3 +42,41 @@
 主 CI 同时移除已合并分支的 `issue854-behavior`、`pelican-round-evidence`、`pr612-regressions`、`pr612-regressions-red` 以及质量模板、用户启用和 Issue854 的条件步骤；VIP 入账工作流也清除旧分支的两段 RED 步骤和 `source-format` job，保留 PostgreSQL GREEN 回归。原定义可从上述归档基线的 `.github/workflows/backend-ci.yml` 查阅。
 
 上述 32 个入口已在 GitHub 登记为停用，历史运行记录保留。需要重跑历史验收时，在任务分支恢复所需文件到 `.github/workflows/`，先核对固定 SHA、分支条件、工具链、runner 和脚本路径，再按任务范围重新启用对应工作流。归档文件保留当时配置，不保证在新代码上直接可运行。常规回归优先并入主 CI；确需专用工作流时按相关路径触发，临时 RED/GREEN、截图或试用构建在任务完成后归档。
+
+## Issue 985 Anthropic SSE integrity
+
+[anthropic-stream-integrity-red-green.yml](anthropic-stream-integrity-red-green.yml)
+retains the temporary fixed-production `dfcc6623` RED/GREEN workflow used by
+[PR #987](https://github.com/ranxi2001/sub2api/pull/987). The immutable oracle ran
+against the original checkout and clean candidates, with raw identity/test logs
+in [run 44907259566](https://github.com/ranxi2001/sub2api/actions/runs/44907259566).
+That run passed the strict RED/GREEN validator, race, real handlers, official SDK
+accumulation, isolated PostgreSQL billing and ordinary server build.
+
+The active `anthropic-stream-integrity.yml` retains the reusable path-triggered
+GREEN/race/SDK/PostgreSQL/build gate and validator negative controls. Unit tests
+also remain selected by main CI, whose integration job explicitly runs the PG
+and official SDK fixtures. Archiving the fixed baseline does not mark PR review
+or the current full CI complete; the PR stays Draft pending those gates.
+
+## Issue 1032 payment fulfillment cancellation
+
+[payment-fulfillment-cancellation.yml](payment-fulfillment-cancellation.yml)
+preserves the completed fixed-baseline workflow from
+[PR #1033](https://github.com/ranxi2001/sub2api/pull/1033), byte for byte.
+Candidate `110fc0079754eb854e008a8330f42ba328d708d3` passed the strict
+three-root/four-assertion behavioral RED against
+`cf4e7b5085fa81396ee087282b3913efd88b9595`, then all ten new regression roots
+and selected sibling regressions with race detection, including PostgreSQL
+coupon coverage, in [run 45177612498](https://github.com/ranxi2001/sub2api/actions/runs/45177612498/job/137702821752).
+[Artifact 14821140263](https://github.com/ranxi2001/sub2api/actions/runs/45177612498/artifacts/14821140263)
+contains `source.txt`, `red.log` and `green.log`.
+
+This directory does not run in Actions. Historical reproduction requires
+restoring the workflow to `.github/workflows/` on a task branch and checking
+the frozen source/fixtures, assertion line numbers, toolchain and PostgreSQL
+setup; the archived configuration is not guaranteed to run on later source.
+Tests remain in place for main CI. At archive time two full-CI jobs were still
+pending: this focused evidence does not establish overall acceptance or
+acceptance of the archive commit. Scope remains Refs #1032; historical recovery,
+manual-compensation handling and the original incident remain unresolved.

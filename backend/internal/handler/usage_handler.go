@@ -67,6 +67,30 @@ func NewUsageHandler(
 	}
 }
 
+// SettledDebits is a bounded, read-only lookup. It never initiates billing.
+func (h *UsageHandler) SettledDebits(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	var input struct {
+		IDs []int64 `json:"usage_ids"`
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4096)
+	if err := c.ShouldBindJSON(&input); err != nil {
+		response.BadRequest(c, "Invalid usage IDs")
+		return
+	}
+	items, err := h.usageService.SettledDebits(c.Request.Context(), subject.UserID, input.IDs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"items": items})
+}
+
 func (h *UsageHandler) parseUserUsageFilters(c *gin.Context, requireRange bool) (*userUsageFilters, bool) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
@@ -262,7 +286,6 @@ func (h *UsageHandler) List(c *gin.Context) {
 		return
 	}
 
-	h.usageService.EnrichContentTiming(c.Request.Context(), records)
 	if isObserverUsageRequest(c) {
 		out := make([]dto.AdminUsageLog, 0, len(records))
 		for i := range records {
@@ -480,6 +503,9 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 	}
 	if !isObserverUsageRequest(c) {
 		stats.TotalAccountCost = nil
+		for i := range stats.Endpoints {
+			stats.Endpoints[i].AccountCost = 0
+		}
 		stats.UpstreamEndpoints = nil
 		stats.EndpointPaths = nil
 	}

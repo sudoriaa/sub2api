@@ -19,11 +19,12 @@ import {
   setPlatformCatalog
 } from '@/constants/platformCatalog'
 
-const { updateAccountMock, syncUpstreamModelsMock, checkMixedChannelRiskMock, authIsSimpleMode, showErrorMock, showWarningMock } = vi.hoisted(() => ({
+const { updateAccountMock, syncUpstreamModelsMock, previewUpstreamGroup, checkMixedChannelRiskMock, authIsSimpleMode, showErrorMock, showWarningMock } = vi.hoisted(() => ({
   showErrorMock: vi.fn(),
   showWarningMock: vi.fn(),
   updateAccountMock: vi.fn(),
   syncUpstreamModelsMock: vi.fn(),
+  previewUpstreamGroup: vi.fn(),
   checkMixedChannelRiskMock: vi.fn(),
   authIsSimpleMode: { value: true }
 }))
@@ -56,6 +57,7 @@ vi.mock('@/api/admin', () => ({
       getManagementCapabilities: vi.fn().mockResolvedValue({ web_search_enabled: false, account_quota_notify_enabled: false }),
       update: updateAccountMock,
       syncUpstreamModels: syncUpstreamModelsMock,
+      previewUpstreamGroup,
       checkMixedChannelRisk: checkMixedChannelRiskMock
     },
     settings: {
@@ -100,6 +102,7 @@ const BaseDialogStub = defineComponent({
 const ModelWhitelistSelectorStub = defineComponent({
   name: 'ModelWhitelistSelector',
   props: {
+    syncCredentials: Object,
     modelMappings: { type: Array, default: () => [] },
     modelValue: {
       type: Array,
@@ -152,6 +155,7 @@ const SelectStub = defineComponent({
 const GroupSelectorStub = defineComponent({
   name: 'GroupSelector',
   props: {
+    platform: { type: String, default: '' },
     modelValue: {
       type: Array,
       default: () => []
@@ -355,6 +359,179 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
 }
 
 describe('EditAccountModal', () => {
+  it('announces gateway model settings independently and shares persistent dismissal', async () => {
+    localStorage.removeItem('sub2api:new-feature-notices:v1:41')
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const notices = useNewFeatureNoticeStore()
+    notices.dismiss(41, NEW_FEATURE_NOTICES.crossPlatformGatewayAccounts)
+    const account = { ...buildAccount(), platform: 'gateway', type: 'gateway',
+      credentials: { upstream_kind: 'new_api', base_url: 'https://relay.example.com' } } as any
+    const wrapper = mountModal(account)
+    await flushPromises()
+    const badge = wrapper.findAllComponents(NewFeatureBadge).find(item => item.props('noticeId') === NEW_FEATURE_NOTICES.gatewayModelSync)!
+    expect(badge.find('button').exists()).toBe(true)
+    const sibling = mount(NewFeatureBadge, { props: { noticeId: NEW_FEATURE_NOTICES.gatewayModelSync, userId: 41 }, global: { plugins: [pinia] } })
+    await badge.get('button').trigger('click')
+    expect(sibling.find('button').exists()).toBe(false)
+    wrapper.unmount()
+    sibling.unmount()
+    setActivePinia(createPinia())
+    const reloaded = mountModal(account)
+    await flushPromises()
+    const reloadedBadge = reloaded.findAllComponents(NewFeatureBadge).find(item => item.props('noticeId') === NEW_FEATURE_NOTICES.gatewayModelSync)!
+    expect(reloadedBadge.find('button').exists()).toBe(false)
+    expect(useNewFeatureNoticeStore().isDismissed(41, NEW_FEATURE_NOTICES.crossPlatformGatewayAccounts)).toBe(true)
+    const future = mount(NewFeatureBadge, { props: { noticeId: 'fixture-future-gateway-notice-C', userId: 41 } })
+    expect(future.find('button').exists()).toBe(true)
+    future.unmount()
+  })
+
+  it.each(['new_api', 'sub2api'])('keeps %s gateway models across connection and group edits', async (kind) => {
+    const account = { ...buildAccount(), platform: 'gateway', type: 'gateway', group_ids: [10],
+      credentials: { upstream_kind: kind, base_url: 'https://relay.example.com',
+        model_mapping: { live: 'live', public: 'live' }, unknown_option: { keep: true } } } as any
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await flushPromises()
+    const selector = wrapper.getComponent(ModelWhitelistSelectorStub)
+    expect(selector.props('modelValue')).toEqual(['live'])
+    expect(selector.props('modelMappings')).toEqual([{ from: 'public', to: 'live' }])
+    const fields = wrapper.get('[data-testid="gateway-account-fields"]')
+    await fields.get('input[type="url"]').setValue('https://edited.example.com')
+    await fields.get('input[type="password"]').setValue('synthetic-new-key')
+    wrapper.getComponent(GroupSelectorStub).vm.$emit('update:modelValue', [20])
+    await flushPromises()
+    expect(selector.props('syncCredentials')).toMatchObject({ account_id: account.id,
+      upstream_kind: kind, base_url: 'https://edited.example.com', api_key: 'synthetic-new-key' })
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls[0]?.[1]).toMatchObject({ group_ids: [20], credentials: {
+      upstream_kind: kind, base_url: 'https://edited.example.com', api_key: 'synthetic-new-key',
+      model_mapping: account.credentials.model_mapping
+    } })
+  })
+
+  it('keeps the target platform announcement independent, shared and persistent', async () => {
+    const noticeId = NEW_FEATURE_NOTICES.accountEditPlatform
+    localStorage.removeItem('sub2api:new-feature-notices:v1:41')
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    useNewFeatureNoticeStore().dismiss(41, NEW_FEATURE_NOTICES.apiKeyModelPolicy)
+    const wrapper = mountModal()
+    await flushPromises()
+    const announcement = wrapper.findAllComponents(NewFeatureBadge).find(badge => badge.props('noticeId') === noticeId)!
+    expect(announcement.find('button').exists()).toBe(true)
+    const sibling = mount(NewFeatureBadge, { props: { noticeId, userId: 41 }, global: { plugins: [pinia] } })
+    await announcement.get('button').trigger('click')
+    expect(sibling.find('button').exists()).toBe(false)
+    wrapper.unmount()
+    sibling.unmount()
+    setActivePinia(createPinia())
+    const reloaded = mountModal()
+    await flushPromises()
+    expect(reloaded.get('[data-testid="edit-account-platform-section"]').find('[data-testid="new-feature-badge"]').exists()).toBe(false)
+    const notices = useNewFeatureNoticeStore()
+    expect(notices.isDismissed(41, NEW_FEATURE_NOTICES.apiKeyModelPolicy)).toBe(true)
+    expect(notices.isDismissed(41, NEW_FEATURE_NOTICES.usageRateCard)).toBe(false)
+  })
+
+  it('switches API key platform and saves the target form without stale mappings or groups', async () => {
+    const account = { ...buildAccount(), group_ids: [10], extra: { openai_passthrough: true } }
+    updateAccountMock.mockReset().mockResolvedValue({ ...account, platform: 'anthropic' })
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await flushPromises()
+    await wrapper.get('[data-testid="edit-account-platform"]').setValue('anthropic')
+    await flushPromises()
+    expect(wrapper.getComponent({ name: 'GroupSelector' }).props('platform')).toBe('anthropic')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).toHaveBeenCalledWith(1, expect.objectContaining({
+      platform: 'anthropic', group_ids: [], credentials: expect.objectContaining({ base_url: 'https://api.openai.com' })
+    }))
+    const payload = updateAccountMock.mock.calls[0][1]
+    expect(payload.credentials.model_mapping).toBeUndefined()
+    expect(payload.extra.openai_passthrough).toBeUndefined()
+    expect(account.platform).toBe('openai')
+    expect(account.credentials.model_mapping).toEqual({ 'gpt-5.2': 'gpt-5.2' })
+  })
+
+  it('shows and saves the cache TTL billing switch after switching OpenAI API key to Anthropic', async () => {
+    const account = { ...buildAccount(), group_ids: [10], extra: {} }
+    updateAccountMock.mockReset().mockResolvedValue({ ...account, platform: 'anthropic' })
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await flushPromises()
+    const toggle = '[data-testid="cache-ttl-billing-from-request-toggle"]'
+    const badges = () => wrapper.findAllComponents(NewFeatureBadge).filter(
+      (badge) => badge.props('noticeId') === NEW_FEATURE_NOTICES.cacheTtlBillingFromRequest
+    )
+    expect(wrapper.find(toggle).exists()).toBe(false)
+    expect(badges()).toHaveLength(0)
+
+    await wrapper.get('[data-testid="edit-account-platform"]').setValue('anthropic')
+    await flushPromises()
+    expect(wrapper.find(toggle).exists()).toBe(true)
+    expect(badges()).toHaveLength(1)
+    await wrapper.get(toggle).trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls[0]?.[1]).toMatchObject({
+      platform: 'anthropic', extra: expect.objectContaining({ cache_ttl_billing_from_request: true })
+    })
+  })
+
+  it('hides the cache TTL billing switch and does not save it after switching Anthropic API key to OpenAI', async () => {
+    const account = {
+      ...buildAccount(), id: 24, platform: 'anthropic', type: 'apikey',
+      credentials: { api_key: 'sk-relay', base_url: 'https://relay.example.com' },
+      extra: { cache_ttl_billing_from_request: true }
+    } as any
+    updateAccountMock.mockReset().mockResolvedValue({ ...account, platform: 'openai' })
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await flushPromises()
+    const toggle = '[data-testid="cache-ttl-billing-from-request-toggle"]'
+    expect(wrapper.find(toggle).exists()).toBe(true)
+
+    await wrapper.get('[data-testid="edit-account-platform"]').setValue('openai')
+    await flushPromises()
+    expect(wrapper.find(toggle).exists()).toBe(false)
+    expect(wrapper.findAllComponents(NewFeatureBadge).filter(
+      (badge) => badge.props('noticeId') === NEW_FEATURE_NOTICES.cacheTtlBillingFromRequest
+    )).toHaveLength(0)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload).toMatchObject({ platform: 'openai' })
+    expect(payload?.extra ?? {}).not.toHaveProperty('cache_ttl_billing_from_request')
+  })
+
+  it('preserves common unsaved edits and restores the source platform when the dialog reopens', async () => {
+    const wrapper = mountModal()
+    await flushPromises()
+    await wrapper.get('[data-tour="edit-account-form-name"]').setValue('Renamed fixture')
+    await wrapper.get('[data-testid="edit-account-platform"]').setValue('gemini')
+    await flushPromises()
+    expect(wrapper.get<HTMLInputElement>('[data-tour="edit-account-form-name"]').element.value).toBe('Renamed fixture')
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect(wrapper.get<HTMLSelectElement>('[data-testid="edit-account-platform"]').element.value).toBe('openai')
+  })
+
+  it('offers compatible Google service account platforms and explains platform-bound OAuth accounts', async () => {
+    const vertex = mountModal(buildVertexAccount())
+    await flushPromises()
+    expect(vertex.get('[data-testid="edit-account-platform"]').findAll('option').map(option => option.attributes('value'))).toEqual(['anthropic', 'gemini'])
+    const oauth = mountModal(buildOpenAIOAuthParentAccount())
+    await flushPromises()
+    expect(oauth.get('[data-testid="edit-account-platform"]').attributes('disabled')).toBeDefined()
+    expect(oauth.text()).toContain('admin.accounts.platformSwitch.boundCredentials')
+  })
+
   it.each(['agentIdentity', 'personalAccessToken', 'personal_access_token'])('keeps unsupported %s identities on the existing single proxy selector', async authMode => {
     const account = { ...buildOpenAIOAuthParentAccount(), proxy_id: 45, credentials: { auth_mode: authMode } }
     const wrapper = mountModal(account)
@@ -1271,6 +1448,88 @@ describe('EditAccountModal', () => {
     await flushPromises()
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_copilot_sdk).toBeUndefined()
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.unrelated_setting).toBe('keep')
+  })
+
+  it('uses the saved connection until the administrator changes the upstream', async () => {
+    const account = buildAccount()
+    account.notes = 'local notes'
+    const wrapper = mountModal(account)
+    const sync = wrapper.getComponent({ name: 'UpstreamGroupSyncButton' }).get('button')
+    previewUpstreamGroup.mockResolvedValue({ name: 'Updated group' })
+    await sync.trigger('click')
+    await flushPromises()
+    expect(previewUpstreamGroup).toHaveBeenLastCalledWith({ account_id: account.id }, expect.anything())
+    expect(wrapper.get<HTMLInputElement>('[data-tour="edit-account-form-name"]').element.value).toBe('Updated group')
+    expect(wrapper.get<HTMLTextAreaElement>('textarea').element.value).toBe('local notes')
+
+    await wrapper.get('input[placeholder="https://api.openai.com"]').setValue('https://new-relay.example')
+    expect(sync.element.disabled).toBe(true)
+    await wrapper.get('input[type="password"]').setValue('replacement-key')
+    await sync.trigger('click')
+    expect(previewUpstreamGroup).toHaveBeenLastCalledWith({
+      platform: 'openai', base_url: 'https://new-relay.example', api_key: 'replacement-key', proxy_id: null
+    }, expect.anything())
+    wrapper.unmount()
+  })
+
+  it.each(['apikey', 'oauth'])('can opt a passthrough %s account into model filtering without changing groups', async (type) => {
+    const account = buildAccount()
+    account.type = type
+    account.extra = { openai_passthrough: true }
+    account.group_ids = [17]
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+
+    expect(wrapper.findComponent(ModelWhitelistSelectorStub).exists()).toBe(false)
+    await wrapper.get('[data-testid="edit-openai-passthrough-model-filter"]').setValue(true)
+    await wrapper.get('[data-testid="rewrite-to-snapshot"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload.extra.openai_passthrough).toBe(true)
+    expect(payload.extra.openai_passthrough_model_filter).toBe(true)
+    expect(payload.credentials.model_mapping).toEqual({ 'gpt-5.2-2025-12-11': 'gpt-5.2-2025-12-11' })
+    expect(payload.group_ids).toEqual([17])
+    wrapper.unmount()
+  })
+
+  it('uses the edited platform when enabling passthrough model filtering', async () => {
+    const account = { ...buildAccount(), platform: 'anthropic' }
+    updateAccountMock.mockReset().mockResolvedValue({ ...account, platform: 'openai' })
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await flushPromises()
+    await wrapper.get('[data-testid="edit-account-platform"]').setValue('openai')
+    await flushPromises()
+    await wrapper.get('[data-testid="edit-openai-passthrough-toggle"]').trigger('click')
+    expect(wrapper.findComponent(ModelWhitelistSelectorStub).exists()).toBe(false)
+    await wrapper.get('[data-testid="edit-openai-passthrough-model-filter"]').setValue(true)
+    expect(wrapper.findComponent(ModelWhitelistSelectorStub).exists()).toBe(true)
+    await wrapper.get('[data-testid="rewrite-to-snapshot"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).toHaveBeenCalledWith(1, expect.objectContaining({
+      platform: 'openai',
+      extra: expect.objectContaining({ openai_passthrough: true, openai_passthrough_model_filter: true }),
+      credentials: expect.objectContaining({ model_mapping: { 'gpt-5.2-2025-12-11': 'gpt-5.2-2025-12-11' } })
+    }))
+  })
+
+  it('loads the saved model filter and removes it when passthrough is disabled', async () => {
+    const account = buildAccount()
+    account.extra = { openai_passthrough: true, openai_passthrough_model_filter: true }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+
+    expect(wrapper.get<HTMLInputElement>('[data-testid="edit-openai-passthrough-model-filter"]').element.checked).toBe(true)
+    expect(wrapper.findComponent(ModelWhitelistSelectorStub).exists()).toBe(true)
+    await wrapper.get('[data-testid="edit-openai-passthrough-toggle"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('openai_passthrough_model_filter')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials.model_mapping).toEqual(account.credentials.model_mapping)
+    wrapper.unmount()
   })
 
   it('passes existing non-identity mappings to the whitelist selector and preserves them on save', async () => {
@@ -2301,20 +2560,20 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.upstream_billing_probe_enabled).toBe(true)
   })
 
-  it('keeps New API multipliers manual despite legacy automatic sync flags', async () => {
+  it('keeps customer billing manual and honors disabled New API cost sync', async () => {
     const account = buildAccount()
     account.extra = {
       upstream_billing_provider: 'new_api',
       upstream_billing_probe_enabled: true,
       upstream_billing_rate_sync_enabled: true,
-      cost_multiplier_auto_sync: true,
+      cost_multiplier_auto_sync: false,
       cost_multiplier: 0.2
     }
     updateAccountMock.mockReset().mockResolvedValue(account)
     checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
     const wrapper = mountModal(account)
     expect(wrapper.find('[data-testid="upstream-billing-rate-sync"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="account-cost-auto-sync"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="account-cost-auto-sync"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('admin.accounts.upstreamBilling.newAPI.groupRatioHint')
     expect(wrapper.get<HTMLInputElement>('[data-testid="account-rate-multiplier"]').element.disabled).toBe(false)
     expect(wrapper.get<HTMLInputElement>('[data-testid="account-cost-multiplier"]').element.disabled).toBe(false)
@@ -2327,8 +2586,45 @@ describe('EditAccountModal', () => {
       rate_multiplier: 0.7,
       upstream_billing_probe_enabled: true,
       upstream_billing_rate_sync_enabled: false,
-      extra: { cost_multiplier: 0.3, cost_multiplier_auto_sync: false }
+      extra: { cost_multiplier: 0.3 }
     })
+  })
+
+  it('preserves New API converted cost settings when saving an unrelated account edit', async () => {
+    const account = buildAccount()
+    account.extra = { ...account.extra, upstream_billing_provider: 'new_api', new_api_apply_usd_rate: true, cost_multiplier_auto_sync: true, cost_multiplier: 0.7 }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    expect(wrapper.get<HTMLInputElement>('[data-testid="account-cost-multiplier"]').element.disabled).toBe(true)
+    expect(wrapper.get<HTMLInputElement>('[data-testid="account-rate-multiplier"]').element.disabled).toBe(false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    const extra = updateAccountMock.mock.calls[0]?.[1].extra
+    expect(extra).not.toHaveProperty('cost_multiplier')
+    expect(extra).not.toHaveProperty('cost_multiplier_auto_sync')
+    expect(extra).not.toHaveProperty('new_api_apply_usd_rate')
+  })
+
+  it('opts into group sync independently and clears it when probing stops', async () => {
+    const account = buildAccount()
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    const group = wrapper.get('[data-testid="upstream-billing-group-sync"]')
+    const probe = wrapper.get('[data-testid="upstream-billing-auto-probe"]')
+    const rate = wrapper.get('[data-testid="upstream-billing-rate-sync"]')
+    expect(group.attributes('aria-checked')).toBe('false')
+    await group.trigger('click')
+    expect(probe.attributes('aria-checked')).toBe('true')
+    expect(rate.attributes('aria-checked')).toBe('false')
+    await wrapper.get('form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.lastCall?.[1]).toMatchObject({
+      upstream_billing_group_sync_enabled: true, upstream_billing_rate_sync_enabled: false
+    })
+    await probe.trigger('click')
+    expect(group.attributes('aria-checked')).toBe('false')
+    wrapper.unmount()
   })
 
   it('enabling rate sync also enables probing and stops submitting a manual rate', async () => {
@@ -2511,6 +2807,20 @@ describe('EditAccountModal', () => {
     expect(wrapper.get<HTMLInputElement>('[data-testid="openai-endpoint-capability-seedance"]').element.checked).toBe(true)
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.openai_capabilities).toEqual(['chat_completions', 'seedance'])
+  })
+
+  it.each(['seedance', 'embeddings'])('preserves OpenAI Videos with %s enabled', async (otherCapability) => {
+    const account = buildAccount()
+    account.credentials.openai_capabilities = [otherCapability, 'videos']
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    expect(wrapper.get<HTMLInputElement>('[data-testid="openai-endpoint-capability-videos"]').element.checked).toBe(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.openai_capabilities).toEqual([otherCapability, 'videos'])
   })
 
   it('keeps at least one OpenAI APIKey endpoint capability selected', async () => {
@@ -3193,6 +3503,41 @@ describe('independent account cost multiplier', () => {
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     expect(updateAccountMock.mock.calls.at(-1)?.[1]?.extra?.cost_multiplier).toBe(0)
   })
+  describe.each([false, true])('API-only token procurement basis (platform switch: %s)', (switchPlatform) => {
+    it.each([
+      { loaded: 'account_stats', latest: 'standard_charge' },
+      { loaded: 'standard_charge', latest: 'account_stats' },
+      { loaded: 'account_stats', latest: null },
+      { loaded: 'standard_charge', latest: null }
+    ])('omits $loaded after an API update to $latest on a name edit', async ({ loaded, latest }) => {
+      const account = { ...buildAccount(), extra: { token_procurement_basis: loaded, unrelated: 'keep' } }
+      const wrapper = mountModal(account)
+      await flushPromises()
+
+      // A separate API client commits while the dialog still holds its old DTO.
+      const updatedAccount = { ...account, name: 'Renamed after API update',
+        platform: switchPlatform ? 'anthropic' : account.platform,
+        extra: { ...account.extra, token_procurement_basis: latest } }
+      updateAccountMock.mockReset().mockResolvedValue(updatedAccount)
+      if (switchPlatform) {
+        await wrapper.get('[data-testid="edit-account-platform"]').setValue('anthropic')
+        await flushPromises()
+      }
+      await wrapper.get('[data-tour="edit-account-form-name"]').setValue(updatedAccount.name)
+      await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+      await flushPromises()
+
+      expect(updateAccountMock).toHaveBeenCalledTimes(1)
+      const [id, payload] = updateAccountMock.mock.calls[0]
+      expect(id).toBe(account.id)
+      expect(payload.name).toBe(updatedAccount.name)
+      expect(payload.extra).not.toHaveProperty('token_procurement_basis')
+      if (switchPlatform) expect(payload.platform).toBe('anthropic')
+      else expect(payload.extra.unrelated).toBe('keep')
+      expect(account.extra.token_procurement_basis).toBe(loaded)
+      expect(wrapper.emitted('updated')?.[0]?.[0]).toEqual(updatedAccount)
+    })
+  })
   it('lets an operator disable upstream cost syncing and save the actual recharge cost', async () => {
     const account = { ...buildAccount(), extra: { cost_multiplier: 1, upstream_billing_probe_enabled: true } }
     const wrapper = mountModal(account)
@@ -3632,6 +3977,46 @@ describe('OpenAI connection account type boundary in the actual editor', () => {
     expect(mimicExtra).not.toHaveProperty('anthropic_mimic_claude_code_deduct_tokens')
   })
 
+  it('restores and saves the Anthropic API key cache TTL billing-from-request switch', async () => {
+    const account = {
+      ...buildAccount(),
+      id: 22,
+      platform: 'anthropic',
+      type: 'apikey',
+      credentials: { api_key: 'sk-relay', base_url: 'https://relay.example.com' },
+      extra: { anthropic_passthrough: true, cache_ttl_billing_from_request: true, unrelated: 'preserve' }
+    } as any
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await flushPromises()
+
+    const toggle = () => wrapper.get('[data-testid="cache-ttl-billing-from-request-toggle"]')
+    expect(toggle().classes()).toContain('bg-primary-600')
+
+    const badges = () => wrapper.findAllComponents(NewFeatureBadge).filter(
+      (badge) => badge.props('noticeId') === NEW_FEATURE_NOTICES.cacheTtlBillingFromRequest
+    )
+    expect(badges()).toHaveLength(1)
+    expect(badges()[0].props('userId')).toBe(41)
+    await badges()[0].get('button').trigger('click')
+    expect(badges().filter((badge) => badge.find('button').exists())).toHaveLength(0)
+
+    await wrapper.get('#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toMatchObject({
+      anthropic_passthrough: true, cache_ttl_billing_from_request: true, unrelated: 'preserve'
+    })
+
+    await toggle().trigger('click')
+    await flushPromises()
+    await wrapper.get('#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    const disabledExtra = updateAccountMock.mock.calls[1]?.[1]?.extra
+    expect(disabledExtra).toMatchObject({ anthropic_passthrough: true, unrelated: 'preserve' })
+    expect(disabledExtra).not.toHaveProperty('cache_ttl_billing_from_request')
+  })
+
   it.each([false, true])('restores and changes Anthropic estimated deduction from %s', async (deduct) => {
     const account = {
       ...buildAccount(),
@@ -3708,3 +4093,91 @@ describe('initial OAuth model scope ownership', () => {
   expect(useNewFeatureNoticeStore().isDismissed(41, NEW_FEATURE_NOTICES.protocolFeatureSwitches)).toBe(true)
   reloaded.unmount()
  })
+
+
+describe('Claude account probe penalty', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(buildAccount())
+  })
+  const account = () => ({ ...buildAccount(), platform: 'anthropic', credentials: { api_key: 'synthetic-key', base_url: 'https://example.invalid' } })
+  it('enables, saves, reloads and disables the account minimum without changing group prices', async () => {
+    const original = account()
+    const wrapper = mountModal(original); await flushPromises()
+    expect(wrapper.get<HTMLInputElement>('[data-testid="probe-penalty-enabled"]').element.checked).toBe(false)
+    await wrapper.get('[data-testid="probe-penalty-enabled"]').setValue(true)
+    await wrapper.get('[data-testid="probe-penalty-minimum"]').setValue(0.001)
+    await wrapper.get('#edit-account-form').trigger('submit.prevent'); await flushPromises()
+    expect(updateAccountMock).toHaveBeenCalledWith(1, expect.objectContaining({ extra: expect.objectContaining({ probe_penalty: { enabled: true, minimum_charge: 0.001 } }) }))
+    const extra = updateAccountMock.mock.calls[0][1].extra
+    wrapper.unmount(); updateAccountMock.mockClear()
+    const reopened = mountModal({ ...original, extra }); await flushPromises()
+    expect(reopened.get<HTMLInputElement>('[data-testid="probe-penalty-enabled"]').element.checked).toBe(true)
+    await reopened.get('[data-testid="probe-penalty-enabled"]').setValue(false)
+    await reopened.get('#edit-account-form').trigger('submit.prevent'); await flushPromises()
+    expect(updateAccountMock.mock.calls[0][1].extra.probe_penalty).toEqual({ enabled: false, minimum_charge: 0.001 })
+  })
+  it('rejects a zero enabled minimum and hides unsupported account controls', async () => {
+    const wrapper = mountModal(account()); await flushPromises()
+    await wrapper.get('[data-testid="probe-penalty-enabled"]').setValue(true)
+    await wrapper.get('[data-testid="probe-penalty-minimum"]').setValue(0)
+    await wrapper.get('#edit-account-form').trigger('submit.prevent'); await flushPromises()
+    expect(updateAccountMock).not.toHaveBeenCalled()
+    expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.probePenalty.invalid')
+    wrapper.unmount()
+    const other = mountModal(buildAccount()); await flushPromises()
+    expect(other.find('[data-testid="probe-penalty-settings"]').exists()).toBe(false)
+  })
+  it('keeps the new announcement independent and remembers dismissal across remounts', async () => {
+    localStorage.clear(); const pinia = createPinia(); setActivePinia(pinia)
+    const notices = useNewFeatureNoticeStore(pinia)
+    notices.dismiss(41, NEW_FEATURE_NOTICES.protocolFeatureSwitches)
+    const wrapper = mountModal(account()); await flushPromises()
+    const badge = wrapper.findAllComponents(NewFeatureBadge).find(b => b.props('noticeId') === NEW_FEATURE_NOTICES.accountProbePenalty)!
+    expect(badge.get('button').exists()).toBe(true)
+    await badge.get('button').trigger('click')
+    wrapper.unmount(); setActivePinia(createPinia())
+    const reloaded = mountModal(account()); await flushPromises()
+    expect(reloaded.get('[data-testid="probe-penalty-settings"]').find('[data-testid="new-feature-badge"]').exists()).toBe(false)
+    expect(useNewFeatureNoticeStore().isDismissed(41, NEW_FEATURE_NOTICES.protocolFeatureSwitches)).toBe(true)
+    const later = mount(NewFeatureBadge, { props: { noticeId: 'probe-penalty-fixture-next-feature', userId: 41 } })
+    expect(later.get('button').exists()).toBe(true)
+  })
+})
+
+
+it('omits untouched probe settings so stale editors cannot restore old charges', async () => {
+  vi.clearAllMocks(); checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false }); updateAccountMock.mockResolvedValue(buildAccount())
+  const account = { ...buildAccount(), platform: 'anthropic', credentials: { api_key: 'synthetic' }, extra: { probe_penalty: { enabled: true, minimum_charge: .001 } } }
+  const wrapper = mountModal(account); await flushPromises()
+  await wrapper.get('#edit-account-form').trigger('submit.prevent'); await flushPromises()
+  expect(updateAccountMock.mock.calls[0][1].extra).not.toHaveProperty('probe_penalty')
+})
+
+describe('domestic route automatic scheduling', () => {
+  it('defaults off, saves the opt-in and removes it on uncheck', async () => {
+    vi.clearAllMocks()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    const account = { ...buildAccount(), platform: 'deepseek', type: 'apikey', extra: { custom_flag: true } }
+    updateAccountMock.mockResolvedValue(account)
+    const selector = '[data-testid="domestic-route-auto-schedule"]'
+    const modal = mountModal(account)
+    await flushPromises()
+    expect(modal.get<HTMLInputElement>(selector).element.checked).toBe(false)
+    expect(modal.findAllComponents(NewFeatureBadge).some(b => b.props('noticeId') === NEW_FEATURE_NOTICES.domesticRouteAutoSchedule)).toBe(true)
+    await modal.get(selector).setValue(true)
+    await modal.get('#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    const saved = updateAccountMock.mock.calls[0][1].extra
+    expect(saved).toMatchObject({ domestic_route_auto_schedule: true, custom_flag: true })
+    modal.unmount()
+    const reopened = mountModal({ ...account, extra: saved })
+    await flushPromises()
+    expect(reopened.get<HTMLInputElement>(selector).element.checked).toBe(true)
+    await reopened.get(selector).setValue(false)
+    await reopened.get('#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls[1][1].extra.domestic_route_auto_schedule).toBeUndefined()
+  })
+})

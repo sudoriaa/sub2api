@@ -50,7 +50,19 @@
       class="space-y-5"
     >
       <div>
-        <label class="input-label">{{ t('admin.accounts.accountName') }}</label>
+        <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
+          <label class="input-label mb-0">{{ t('admin.accounts.accountName') }}</label>
+          <UpstreamGroupSyncButton
+            :user-id="authStore.user?.id"
+            v-if="form.type === 'apikey'"
+            v-model:name="form.name"
+            v-model:notes="form.notes"
+            :source="upstreamGroupSource"
+            allow-auto
+            :auto="upstreamGroupSyncEnabled"
+            @update:auto="setUpstreamGroupSync"
+          />
+        </div>
         <input
           v-model="form.name"
           type="text"
@@ -59,6 +71,9 @@
           :placeholder="t('admin.accounts.enterAccountName')"
           data-tour="account-form-name"
         />
+        <p v-if="form.type === 'apikey' && upstreamGroupSyncEnabled" class="input-hint">
+          {{ t('admin.accounts.upstreamBilling.autoSyncGroupHint') }}
+        </p>
       </div>
       <div>
         <label class="input-label">{{ t('admin.accounts.notes') }}</label>
@@ -250,6 +265,12 @@
             <PlatformIcon platform="opencode_go" size="sm" />
             OpenCode
           </button>
+          <div class="flex items-center gap-1">
+            <button type="button" class="rounded-md px-3 py-2.5 text-sm font-medium" data-testid="platform-button-gateway"
+              :aria-pressed="form.platform === 'gateway'" :class="{ 'bg-white text-primary-600 shadow-sm dark:bg-dark-600': form.platform === 'gateway' }"
+              @click="form.platform = 'gateway'">Sub2API / New API</button>
+            <NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.crossPlatformGatewayAccounts" :user-id="authStore.user?.id" />
+          </div>
           <!-- 没有专属界面的多协议供应商：通用表单（模式 / 协议 / 端点来自 profile） -->
           <button
             v-for="spec in extraMultiProtocolPlatforms"
@@ -272,6 +293,10 @@
         </div>
       </div>
 
+      <GatewayAccountFields v-if="form.platform === 'gateway'" v-model:kind="gatewayKind" v-model:base-url="gatewayBaseUrl"
+        v-model:api-key="gatewayApiKey" v-model:probe="upstreamBillingAutoProbeEnabled" />
+      <GatewayModelSettings v-if="form.platform === 'gateway'" v-model:models="allowedModels" v-model:mappings="modelMappings"
+        :sync-credentials="gatewaySyncCredentials" />
       <QwenPlatformNotice :user-id="authStore.user?.id" />
       <QwenCacheSettings v-if="form.platform === 'qwen'" v-model:session-cache="qwenSessionCache" v-model:strict-affinity="qwenStrictAffinity" :user-id="authStore.user?.id" @base-url="setQwenBaseUrl" />
 
@@ -467,7 +492,7 @@
             <Icon name="shield" size="sm" />
             <div>
               <span class="block text-sm font-medium text-gray-900 dark:text-white">2FA</span>
-              <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('tokenGuard.twoFA.label') }}</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('openaiRelogin.twoFA.label') }}</span>
             </div>
           </button>
 
@@ -482,7 +507,7 @@
             </div>
           </button>
         </div>
-        <p v-if="isOpenAITwoFA" class="input-hint">{{ t('tokenGuard.twoFA.nameHint') }}</p>
+        <p v-if="isOpenAITwoFA" class="input-hint">{{ t('openaiRelogin.twoFA.nameHint') }}</p>
         <div v-if="isOpenAIBPSOAuth" class="mt-3 space-y-2" data-testid="bps-oauth-models">
           <p class="input-hint">{{ t('admin.accounts.oauth.openai.excelLoginHint') }}</p>
           <label class="input-label">{{ t('admin.accounts.openai.excelBPSModels') }}</label>
@@ -1301,7 +1326,7 @@
               <p class="input-hint">{{ t('admin.accounts.vertexApiKeyProjectIdHint') }}</p>
             </div>
             <div v-if="vertexProjectId.trim()">
-              <label class="input-label">Location</label>
+              <label class="input-label">Location <NewFeatureBadge v-if="authStore.user?.id != null" :notice-id="NEW_FEATURE_NOTICES.vertexMultiRegion" :user-id="authStore.user?.id" /></label>
               <select
                 v-model="vertexLocation"
                 required
@@ -1390,7 +1415,7 @@
               />
             </div>
             <div>
-              <label class="input-label">Location</label>
+              <label class="input-label">Location <NewFeatureBadge v-if="authStore.user?.id != null" :notice-id="NEW_FEATURE_NOTICES.vertexMultiRegion" :user-id="authStore.user?.id" /></label>
               <select
                 v-model="vertexLocation"
                 required
@@ -2067,6 +2092,8 @@
             </div>
 
             <HeaderOverrideEditor
+
+              :user-id="authStore.user?.id"
               :rows="headerOverrideRows"
               @update:rows="headerOverrideRows = $event"
             />
@@ -2522,7 +2549,10 @@
           </div>
 
           <HeaderOverrideEditor
+
+            :user-id="authStore.user?.id"
             :rows="headerOverrideRows"
+            :allow-variables="false"
             @update:rows="headerOverrideRows = $event"
           />
         </div>
@@ -3371,6 +3401,7 @@
           </div>
           <button
             type="button"
+            data-testid="create-openai-passthrough-toggle"
             @click="openaiPassthroughEnabled = !openaiPassthroughEnabled"
             :class="[
               'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
@@ -3385,6 +3416,21 @@
             />
           </button>
         </div>
+        <label v-if="openaiPassthroughEnabled" class="mt-3 flex items-start gap-2">
+          <input
+            v-model="openaiPassthroughModelFilterEnabled"
+            type="checkbox"
+            data-testid="create-openai-passthrough-model-filter"
+            class="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+          <span class="text-sm">
+            {{ t('admin.accounts.openai.passthroughModelFilter') }}
+            <NewFeatureBadge v-if="authStore.user?.id != null" :notice-id="NEW_FEATURE_NOTICES.passthroughModelFilter" :user-id="authStore.user?.id" />
+            <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.passthroughModelFilterDesc') }}
+            </span>
+          </span>
+        </label>
       </div>
 
       <OpenAIRequestTimezoneField v-if="form.platform === 'openai'" v-model="openAIRequestTimezone" />
@@ -3488,6 +3534,40 @@
               :class="[
                 'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
                 anthropicPassthroughEnabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+      </div>
+
+      <!-- Anthropic API Key 按请求 TTL 计费开关 -->
+      <div
+        v-if="form.platform === 'anthropic' && accountCategory === 'apikey'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="flex items-center gap-2">
+              <label class="input-label mb-0">{{ t('admin.accounts.anthropic.cacheTtlBillingFromRequest') }}</label>
+              <NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.cacheTtlBillingFromRequest" :user-id="authStore.user?.id" />
+            </div>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.anthropic.cacheTtlBillingFromRequestDesc') }}
+            </p>
+          </div>
+          <button
+            type="button"
+            data-testid="cache-ttl-billing-from-request-toggle"
+            @click="cacheTtlBillingFromRequestEnabled = !cacheTtlBillingFromRequestEnabled"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              cacheTtlBillingFromRequestEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                cacheTtlBillingFromRequestEnabled ? 'translate-x-5' : 'translate-x-0'
               ]"
             />
           </button>
@@ -3814,20 +3894,23 @@
         <div>
           <label class="input-label mb-2 block">{{ t('admin.accounts.openai.endpointCapabilities') }}</label>
           <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <label
+            <div
               v-for="option in openAIEndpointCapabilityOptions"
               :key="option.value"
-              class="flex cursor-pointer items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-dark-600"
+              class="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-dark-600"
             >
-              <input
-                type="checkbox"
-                class="rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500"
-                :data-testid="`openai-endpoint-capability-${option.value}`"
-                :checked="openAIEndpointCapabilities.includes(option.value)"
-                @change="toggleOpenAIEndpointCapability(option.value, $event)"
-              />
-              <span class="text-gray-700 dark:text-gray-200">{{ option.label }}</span>
-            </label>
+              <label class="flex flex-1 cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox"
+                  class="rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500"
+                  :data-testid="`openai-endpoint-capability-${option.value}`"
+                  :checked="openAIEndpointCapabilities.includes(option.value)"
+                  @change="toggleOpenAIEndpointCapability(option.value, $event)"
+                />
+                <span class="text-gray-700 dark:text-gray-200">{{ option.label }}</span>
+              </label>
+              <NewFeatureBadge v-if="option.value === 'videos'" :notice-id="NEW_FEATURE_NOTICES.openaiVideos" :user-id="authStore.user?.id" />
+            </div>
           </div>
           <p class="input-hint">{{ t('admin.accounts.openai.endpointCapabilitiesDesc') }}</p>
         </div>
@@ -4327,7 +4410,7 @@ import { DEFAULT_ACCOUNT_COST_MULTIPLIER, isValidAccountCostMultiplier } from '@
 
 import OpenAITwoFAImport from './OpenAITwoFAImport.vue'
 import { createTokenGuardV2Account } from '@/api/admin/accountTokenGuardV2'
-import type { TokenGuardReloginAccount } from '@/api/admin/accountTokenGuard'
+import type { OpenAIReloginCredentials } from '@/api/admin/openaiRelogin'
 import { ref, reactive, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
@@ -4377,16 +4460,19 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import MatureProviderImport, { type ProviderSelection } from './MatureProviderImport.vue'
+import GatewayAccountFields from './GatewayAccountFields.vue'
 import NewFeatureBadge from '@/components/common/NewFeatureBadge.vue'
 import OpenAIProxySettings from '@/components/account/OpenAIProxySettings.vue'
 import { NEW_FEATURE_NOTICES } from '@/constants/newFeatureNotices'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
+import UpstreamGroupSyncButton from '@/components/account/UpstreamGroupSyncButton.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
+import GatewayModelSettings from '@/components/account/GatewayModelSettings.vue'
 import AccountAutoBPSSection from '@/components/account/AccountAutoBPSSection.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import Toggle from '@/components/common/Toggle.vue'
@@ -4467,7 +4553,7 @@ const { t } = useI18n()
 const browserTimeZone = getBrowserTimeZone()
 
 const oauthStepTitle = computed(() => {
-  if (isOpenAITwoFA.value) return t('tokenGuard.twoFA.title')
+  if (isOpenAITwoFA.value) return t('openaiRelogin.twoFA.title')
   if (isOpenAIBPSOAuth.value) return t('admin.accounts.oauth.openai.excelTitle')
   if (form.platform === 'openai') return t('admin.accounts.oauth.openai.title')
   if (form.platform === 'gemini') return t('admin.accounts.oauth.gemini.title')
@@ -4566,6 +4652,9 @@ const emit = defineEmits<{
 
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const gatewayKind = ref<'sub2api' | 'new_api'>('sub2api')
+const gatewayBaseUrl = ref('')
+const gatewayApiKey = ref('')
 
 const hideAccountLongContextBilling = computed(() => {
   return allSelectedGroupsEnableLongContextPricing(form.group_ids, props.groups)
@@ -4697,7 +4786,15 @@ const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const providerImportMode = ref(false), providerSelection = ref<ProviderSelection | null>(null)
 const apiKeyValue = ref('')
+const upstreamGroupSyncEnabled = ref(false)
+function setUpstreamGroupSync(enabled: boolean) {
+  upstreamGroupSyncEnabled.value = enabled
+  if (enabled) upstreamBillingAutoProbeEnabled.value = true
+}
 const upstreamBillingAutoProbeEnabled = ref(true)
+watch(upstreamBillingAutoProbeEnabled, (enabled) => {
+  if (!enabled) upstreamGroupSyncEnabled.value = false
+})
 
 // ── 国产供应商（Kimi / Zhipu / DeepSeek）账号类型、API 协议与端点 ──
 // 多协议供应商（国产厂商与走通用表单的供应商）的接入模式；OpenCode 用 openCodeAccountMode。
@@ -4905,11 +5002,23 @@ function onCnPresetSelect(preset: { mode: CnAccountMode; protocol: CnApiProtocol
   apiKeyBaseUrl.value = preset.url
 }
 
-const syncPreviewCredentials = computed(() => {
-  if (!apiKeyValue.value.trim()) return undefined
-  const baseUrl = isMultiProtocolPlatform.value && apiProtocol.value === 'adaptive'
+const previewBaseUrl = computed(() =>
+  isMultiProtocolPlatform.value && apiProtocol.value === 'adaptive'
     ? adaptiveBaseUrls.value.chat_completions.trim() || apiKeyBaseUrl.value.trim()
     : apiKeyBaseUrl.value.trim()
+)
+
+const upstreamGroupSource = computed(() => {
+  const antigravity = form.platform === 'antigravity'
+  const baseURL = antigravity ? upstreamBaseUrl.value.trim() : previewBaseUrl.value
+  const apiKey = (antigravity ? upstreamApiKey.value : apiKeyValue.value).trim()
+  return baseURL && apiKey
+    ? { platform: form.platform, base_url: baseURL, api_key: apiKey, proxy_id: form.proxy_id }
+    : null
+})
+
+const syncPreviewCredentials = computed(() => {
+  if (!apiKeyValue.value.trim()) return undefined
   const modelMapping = buildModelMappingObject(
     modelRestrictionMode.value,
     allowedModels.value,
@@ -4918,7 +5027,7 @@ const syncPreviewCredentials = computed(() => {
   return {
     platform: form.platform,
     type: form.type,
-    base_url: baseUrl || undefined,
+    base_url: previewBaseUrl.value || undefined,
     api_key: apiKeyValue.value.trim(),
     proxy_id: authStore.isObserver ? undefined : form.proxy_id ?? undefined,
     ...(modelMapping ? { model_mapping: modelMapping } : {})
@@ -4939,6 +5048,11 @@ const openAICompactModelMappings = ref<ModelMapping[]>([])
 const modelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const allowedModels = ref<string[]>([])
 const upstreamModelsPreviewed = ref(false)
+const gatewaySyncCredentials = computed(() => gatewayApiKey.value.trim() ? {
+  platform: 'gateway', type: 'gateway', upstream_kind: gatewayKind.value,
+  base_url: gatewayBaseUrl.value.trim(), api_key: gatewayApiKey.value.trim(),
+  proxy_id: authStore.isObserver ? undefined : form.proxy_id ?? undefined
+} : undefined)
 const DEFAULT_POOL_MODE_RETRY_COUNT = 3
 const MAX_POOL_MODE_RETRY_COUNT = 10
 const DEFAULT_POOL_MODE_RETRY_STATUS_CODES = [401, 403, 429]
@@ -4995,7 +5109,9 @@ const validateGrokOAuthUpstreamConfig = (): boolean => {
     }
   }
   if (headerOverrideEnabled.value) {
-    const headerError = validateHeaderOverrideRows(headerOverrideRows.value)
+    const headerError = validateHeaderOverrideRows(headerOverrideRows.value, {
+      allowVariables: false
+    })
     if (headerError) {
       appStore.showError(t(`admin.accounts.headerOverride.${headerError}`))
       return false
@@ -5018,6 +5134,7 @@ const openAIRequestTimezone = ref('Asia/Singapore')
 const extraImageModels = ref('')
 const extraImageModelPrefixes = ref('')
 const openaiPassthroughEnabled = ref(false)
+const openaiPassthroughModelFilterEnabled = ref(false)
 // OpenAI Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
 const openaiFlattenNamespacesEnabled = ref(false)
 const openAILongContextBillingEnabled = ref(false)
@@ -5044,6 +5161,7 @@ const codexFingerprintModeOptions = computed(() => [
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
 const anthropicStripClaudeCodeIdentityEnabled = ref(false)
+const cacheTtlBillingFromRequestEnabled = ref(false)
 const anthropicMimicClaudeCodeEnabled = ref(false)
 const anthropicMimicClaudeCodeDeductTokens = ref(false)
 // 「模拟 Claude Code」与「抹除 Claude Code 身份」互斥：打开一个就关掉另一个
@@ -5147,14 +5265,15 @@ const openAITextEndpointCapabilityLabel = computed(() => {
 const openAIEndpointCapabilityOptions = computed<{ value: OpenAIEndpointCapability; label: string }[]>(() => [
   { value: 'chat_completions', label: openAITextEndpointCapabilityLabel.value },
   { value: 'embeddings', label: t('admin.accounts.openai.capabilityEmbeddings') },
-  { value: 'seedance', label: 'Seedance (Ark)' }
+  { value: 'seedance', label: 'Seedance (Ark)' },
+  { value: 'videos', label: 'OpenAI Videos' }
 ])
 const openAITextGenerationCapabilityEnabled = computed(() =>
   openAIEndpointCapabilities.value.includes('chat_completions')
 )
 
 const normalizeOpenAIEndpointCapabilities = (values: OpenAIEndpointCapability[]) => {
-  const allowed: OpenAIEndpointCapability[] = ['chat_completions', 'embeddings', 'seedance']
+  const allowed: OpenAIEndpointCapability[] = ['chat_completions', 'embeddings', 'seedance', 'videos']
   const selected = allowed.filter((value) => values.includes(value))
   return selected.length > 0 ? selected : ['chat_completions', 'embeddings'] as OpenAIEndpointCapability[]
 }
@@ -5182,7 +5301,7 @@ const toggleOpenAIEndpointCapability = (capability: OpenAIEndpointCapability, ev
 
 const applyOpenAIEndpointCapabilities = (credentials: Record<string, unknown>) => {
   const capabilities = normalizeOpenAIEndpointCapabilities(openAIEndpointCapabilities.value)
-  if (capabilities.length === 2 && !capabilities.includes('seedance')) {
+  if (capabilities.length === 2 && capabilities.includes('chat_completions') && capabilities.includes('embeddings')) {
     delete credentials.openai_capabilities
     return
   }
@@ -5281,7 +5400,7 @@ const openAIWSModeHintKey = computed(() =>
 )
 
 const isOpenAIModelRestrictionDisabled = computed(() =>
-  form.platform === 'openai' && (openaiPassthroughEnabled.value || copilotSDKEnabled.value)
+  form.platform === 'openai' && ((openaiPassthroughEnabled.value && !openaiPassthroughModelFilterEnabled.value) || copilotSDKEnabled.value)
 )
 
 const mixedChannelWarningMessageText = computed(() => {
@@ -5392,6 +5511,7 @@ const form = reactive({
 
 // Helper to check if current type needs OAuth flow
 const isOAuthFlow = computed(() => {
+  if (form.platform === 'gateway') return false
   // Antigravity upstream 类型不需要 OAuth 流程
   if (form.platform === 'antigravity' && antigravityAccountType.value === 'upstream') {
     return false
@@ -5466,6 +5586,10 @@ watch(
 watch(
   [accountCategory, addMethod, antigravityAccountType, () => form.platform],
   ([category, method, agType]) => {
+    if (form.platform === 'gateway') {
+      form.type = 'gateway'
+      return
+    }
     // Antigravity upstream 类型（实际创建为 apikey）
     if (form.platform === 'antigravity' && agType === 'upstream') {
       form.type = 'apikey'
@@ -5568,6 +5692,7 @@ watch(
     if (newPlatform !== 'openai') {
       copilotSDKEnabled.value = false
       openaiPassthroughEnabled.value = false
+      openaiPassthroughModelFilterEnabled.value = false
       openaiFlattenNamespacesEnabled.value = false
       openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
       openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
@@ -5579,6 +5704,7 @@ watch(
     if (newPlatform !== 'anthropic') {
       anthropicPassthroughEnabled.value = false
       anthropicStripClaudeCodeIdentityEnabled.value = false
+      cacheTtlBillingFromRequestEnabled.value = false
       anthropicMimicClaudeCodeEnabled.value = false
       anthropicMimicClaudeCodeDeductTokens.value = false
       anthropicAPIKeyAuthScheme.value = 'x_api_key'
@@ -5612,6 +5738,7 @@ watch(
     if (platform !== 'anthropic' || category !== 'apikey') {
       anthropicPassthroughEnabled.value = false
       anthropicStripClaudeCodeIdentityEnabled.value = false
+      cacheTtlBillingFromRequestEnabled.value = false
       anthropicMimicClaudeCodeEnabled.value = false
       anthropicMimicClaudeCodeDeductTokens.value = false
       anthropicAPIKeyAuthScheme.value = 'x_api_key'
@@ -6100,6 +6227,7 @@ const resetForm = () => {
   apiKeyValue.value = ''
   upstreamRequestIdHeader.value = ''
   upstreamBillingAutoProbeEnabled.value = true
+  upstreamGroupSyncEnabled.value = false
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null
   editQuotaWeeklyLimit.value = null
@@ -6136,6 +6264,7 @@ const resetForm = () => {
   autoPauseOnExpired.value = true
   copilotSDKEnabled.value = false
   openaiPassthroughEnabled.value = false
+  openaiPassthroughModelFilterEnabled.value = false
   openaiFlattenNamespacesEnabled.value = false
   openAILongContextBillingEnabled.value = false
   openAILongContextBillingTouched.value = false
@@ -6151,6 +6280,7 @@ const resetForm = () => {
   codexFingerprintMode.value = 'off'
   anthropicPassthroughEnabled.value = false
   anthropicStripClaudeCodeIdentityEnabled.value = false
+  cacheTtlBillingFromRequestEnabled.value = false
   anthropicMimicClaudeCodeEnabled.value = false
   anthropicMimicClaudeCodeDeductTokens.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
@@ -6177,6 +6307,9 @@ const resetForm = () => {
   allowOverages.value = false
   antigravityAccountType.value = 'oauth'
   antigravityProjectId.value = ''
+  gatewayKind.value = 'sub2api'
+  gatewayBaseUrl.value = ''
+  gatewayApiKey.value = ''
   upstreamBaseUrl.value = ''
   upstreamApiKey.value = ''
   vertexServiceAccountJson.value = ''
@@ -6256,6 +6389,11 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
   } else {
     delete extra.openai_passthrough
     delete extra.openai_oauth_passthrough
+  }
+  if (openaiPassthroughEnabled.value && openaiPassthroughModelFilterEnabled.value) {
+    extra.openai_passthrough_model_filter = true
+  } else {
+    delete extra.openai_passthrough_model_filter
   }
   // 缺省即保留 namespace，不写空值，避免 extra 里堆积默认项
   if (form.type === 'oauth' && openaiFlattenNamespacesEnabled.value) {
@@ -6346,6 +6484,11 @@ const buildAnthropicExtra = (base?: Record<string, unknown>): Record<string, unk
     extra.anthropic_strip_claude_code_identity = true
   } else {
     delete extra.anthropic_strip_claude_code_identity
+  }
+  if (cacheTtlBillingFromRequestEnabled.value) {
+    extra.cache_ttl_billing_from_request = true
+  } else {
+    delete extra.cache_ttl_billing_from_request
   }
   if (anthropicMimicClaudeCodeEnabled.value) {
     extra.anthropic_mimic_claude_code = true
@@ -6463,6 +6606,15 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 }
 
 const handleSubmit = async () => {
+  if (form.platform === 'gateway') {
+    await createAccountAndFinish('gateway', 'gateway', {
+      upstream_kind: gatewayKind.value,
+      base_url: gatewayBaseUrl.value,
+      api_key: gatewayApiKey.value,
+      model_mapping: buildModelMappingObject('combined', allowedModels.value, modelMappings.value) ?? {}
+    })
+    return
+  }
   if (!validateOpenAIRequestProxies()) return
   if (isOpenAIBPSOAuth.value && !bpsOAuthModels.value.some(model => model.trim())) {
     appStore.showError(t('admin.accounts.oauth.openai.excelModelsRequired'))
@@ -6762,6 +6914,7 @@ const handleSubmit = async () => {
     group_ids: form.group_ids,
     extra: withAccountExtraSettings(extra),
     upstream_billing_probe_enabled: upstreamBillingAutoProbeEnabled.value,
+    upstream_billing_group_sync_enabled: upstreamGroupSyncEnabled.value,
     auto_pause_on_expired: autoPauseOnExpired.value
   })
 }
@@ -6908,7 +7061,8 @@ const createAccountAndFinish = async (
     expires_at: form.expires_at,
     // 上游倍率探测对全部 API-key 平台开放（antigravity upstream 走本 helper）；
     // 非 apikey 类型（bedrock/oauth）不传，后端不动作。
-    upstream_billing_probe_enabled: type === 'apikey' ? upstreamBillingAutoProbeEnabled.value : undefined,
+    upstream_billing_probe_enabled: type === 'apikey' || (type === 'gateway' && gatewayKind.value === 'sub2api') ? upstreamBillingAutoProbeEnabled.value : undefined,
+    upstream_billing_group_sync_enabled: type === 'apikey' ? upstreamGroupSyncEnabled.value : undefined,
     auto_pause_on_expired: autoPauseOnExpired.value
   })
 }
@@ -7367,7 +7521,7 @@ const containsUnsupportedProxyGroupIdentity = (content: string): boolean => {
 }
 
 // Reuse Session import normalization and identity deduplication after 2FA login.
-const importTwoFACredential = async (credential: Record<string, unknown>, email: string, login: TokenGuardReloginAccount, signal?: AbortSignal): Promise<'created' | 'skipped'> => {
+const importTwoFACredential = async (credential: Record<string, unknown>, email: string, login: OpenAIReloginCredentials, signal?: AbortSignal): Promise<'created' | 'skipped'> => {
   signal?.throwIfAborted()
   if (!validateOpenAIRequestProxies()) throw new Error(t('admin.accounts.openai.proxyNoUsable'))
   const credentialExtras = buildOpenAICodexImportCredentialExtras()

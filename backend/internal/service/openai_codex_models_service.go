@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -443,6 +444,7 @@ type configuredCodexModelDescriptor struct {
 
 type codexModelMetadataOverride struct {
 	UpstreamModelMetadata
+	audioInput              bool
 	reasoningConflict       bool
 	inputModalitiesConflict bool
 }
@@ -567,6 +569,22 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 		// The October 12, 2026 Codex/Work default increased to 500k after
 		// the bundled official snapshot. Explicit upstream metadata still wins.
 		descriptor.ContextWindow = 500_000
+		// The two 6.2 descriptors now occupy the first two slots.
+		descriptor.Priority = 3
+	}
+	var metadata json.RawMessage
+	switch openai.GPT62ModelID(modelID) {
+	case "gpt-6.2-sol":
+		metadata = openai.CodexGPT62SolMetadata
+	case "gpt-6.2-astra":
+		metadata = openai.CodexGPT62AstraMetadata
+	}
+	if len(metadata) > 0 {
+		if err := json.Unmarshal(metadata, &descriptor); err != nil {
+			panic(err)
+		}
+		descriptor.Slug = modelID
+		descriptor.officialMetadata = metadata
 	}
 	return descriptor
 }
@@ -1059,6 +1077,7 @@ func buildCodexModelsManifest(
 			// a stale official Astra snapshot cannot downgrade the catalog.
 			descriptor.InputModalities = []string{"text", "image"}
 		}
+		descriptor.InputModalities = codexAudioInputModalities(descriptor.InputModalities, modelMetadata[modelID].audioInput)
 		if metadataModelID != modelID {
 			descriptor.DisplayName = modelID
 			descriptor.Description = configuredCodexCustomDescription
@@ -1083,6 +1102,16 @@ func buildCodexModelsManifest(
 	return json.Marshal(struct {
 		Models []json.RawMessage `json:"models"`
 	}{Models: models})
+}
+
+func codexAudioInputModalities(modalities []string, supported bool) []string {
+	if !supported {
+		return slices.DeleteFunc(modalities, func(modality string) bool { return modality == "audio" })
+	}
+	if !slices.Contains(modalities, "audio") {
+		return append(modalities, "audio")
+	}
+	return modalities
 }
 
 func resolveCodexCatalogMetadataModel(
@@ -1739,7 +1768,11 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 }
 
 func (s *OpenAIGatewayService) fetchNativeCodexModelsManifest(ctx context.Context, account *Account, clientVersion, ifNoneMatch string) (*OpenAIModelsResponse, error) {
-	useCache := !isFreshOpenAICredentialProbe(ctx)
+	return s.fetchNativeCodexModelsManifestWithPolicy(ctx, account, clientVersion, ifNoneMatch, openAIModelsReadDefault)
+}
+
+func (s *OpenAIGatewayService) fetchNativeCodexModelsManifestWithPolicy(ctx context.Context, account *Account, clientVersion, ifNoneMatch string, policy openAIModelsReadPolicy) (*OpenAIModelsResponse, error) {
+	useCache := policy != openAIModelsReadWhitelist && !isFreshOpenAICredentialProbe(ctx)
 	if account == nil {
 		return nil, infraerrors.New(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_ACCOUNT_REQUIRED", "account is required")
 	}
@@ -1750,6 +1783,11 @@ func (s *OpenAIGatewayService) fetchNativeCodexModelsManifest(ctx context.Contex
 
 	if credAccount.IsExcelOAuth() {
 		return nil, errExcelOAuthRouteUnavailable
+	}
+	if policy == openAIModelsReadWhitelist && credAccount.IsOpenAIAgentIdentity() {
+		// Even building these headers can create/persist a task. Whitelist
+		// discovery never owns the agent identity task lifecycle.
+		return nil, infraerrors.BadRequest("OPENAI_MODELS_READ_ONLY_ACCOUNT_UNSUPPORTED", "Read-only model discovery does not support agent identity accounts")
 	}
 	clientVersion = strings.TrimSpace(clientVersion)
 	if clientVersion == "" {
@@ -1794,7 +1832,8 @@ func (s *OpenAIGatewayService) fetchNativeCodexModelsManifest(ctx context.Contex
 	headers := make(http.Header)
 	if useAPIKeyUpstream {
 		headers.Set("Authorization", "Bearer "+authToken)
-		credAccount.ApplyHeaderOverrides(headers)
+		// 清单按请求头分桶缓存并跨用户共享：不携带用户身份。
+		credAccount.ApplyHeaderOverridesWithContext(withoutHeaderOverrideRequestScope(ctx), headers)
 	} else {
 		authHeaders, authErr := s.buildOpenAIAuthenticationHeaders(ctx, credAccount, authToken)
 		if authErr != nil {
@@ -1850,6 +1889,11 @@ func (s *OpenAIGatewayService) fetchNativeCodexModelsManifest(ctx context.Contex
 	if !useCache {
 		request.headers.Del("If-None-Match")
 		request.headers.Set("Cache-Control", "no-cache")
+	}
+	if policy == openAIModelsReadWhitelist {
+		// Bypass the shared display cache and its detached refresh completely.
+		// Return the actual response before OAuth health handling/task recovery.
+		return s.fetchCodexModelsManifestUpstream(ctx, request, "")
 	}
 	if useAPIKeyUpstream {
 		if !useCache {
@@ -2195,6 +2239,9 @@ func CodexModelsManifestETag(body []byte) string {
 }
 
 var apiKeyCodexModelsWithoutResponsesLite = map[string]struct{}{
+	"gpt-6.2-sol":   {},
+	"gpt-6.2-astra": {},
+	"gpt-6.1-terra": {},
 	"gpt-6.1-sol":   {},
 	"gpt-6-astra":   {},
 	"gpt-5.6-sol":   {},
@@ -2316,9 +2363,21 @@ func convertOpenAIModelListToCodexManifestForAccount(body []byte, account *Accou
 			capabilities["multi_agent_version"] = json.RawMessage("null")
 			capabilities["multi_agent_reasoning_effort"] = json.RawMessage("null")
 		}
-		modelMetadata[id] = codexModelMetadataOverride{UpstreamModelMetadata: UpstreamModelMetadata{
-			CodexToolCapabilities: capabilities,
-		}}
+		var modalities []string
+		_ = json.Unmarshal(entry["input_modalities"], &modalities)
+		if len(modalities) == 0 {
+			var declared modelsDevModalities
+			_ = json.Unmarshal(entry["modalities"], &declared)
+			modalities = declared.Input
+		}
+		if len(modalities) == 0 && account != nil {
+			synced, _ := account.GetUpstreamModelMetadata(capabilityModel)
+			modalities = synced.InputModalities
+		}
+		modelMetadata[id] = codexModelMetadataOverride{
+			UpstreamModelMetadata: UpstreamModelMetadata{CodexToolCapabilities: capabilities},
+			audioInput:            accountCodexModelSupportsAudioInput(account, capabilityModel, normalizeCodexInputModalities(modalities)),
+		}
 	}
 	if len(modelIDs) == 0 {
 		return body
@@ -2543,6 +2602,8 @@ func completeAPIKeyCodexModelsManifestMetadata(body []byte, completeAll bool, ac
 		}
 
 		descriptor := newConfiguredCodexModelDescriptor(slug)
+		// A subscription descriptor alone cannot establish audio support for an API key.
+		descriptor.InputModalities = codexAudioInputModalities(descriptor.InputModalities, false)
 		descriptor.SupportsSearchTool = shouldForwardOpenAIResponsesViaRawChatCompletions(account)
 		if accountCodexModelSupportsImageInput(account, slug) {
 			descriptor.InputModalities = []string{"text", "image"}
@@ -2590,6 +2651,15 @@ func completeAPIKeyCodexModelsManifestMetadata(body []byte, completeAll bool, ac
 			imageDetailOriginal := json.RawMessage("true")
 			if !bytes.Equal(bytes.TrimSpace(model["supports_image_detail_original"]), imageDetailOriginal) {
 				model["supports_image_detail_original"] = imageDetailOriginal
+				modelChanged = true
+			}
+		} else if account != nil && resolveUpstreamProtocol(account, APIProtocolResponses, capabilityModel, nil) != APIProtocolResponses {
+			var modalities []string
+			if json.Unmarshal(model["input_modalities"], &modalities) == nil && slices.Contains(modalities, "audio") {
+				model["input_modalities"], err = json.Marshal(codexAudioInputModalities(modalities, false))
+				if err != nil {
+					return nil, fmt.Errorf("encode input modalities for model %q: %w", slug, err)
+				}
 				modelChanged = true
 			}
 		}

@@ -92,17 +92,24 @@ type openAIWSAcquireRequest struct {
 }
 
 type openAIWSHandshakeCompatibilityKey struct {
-	timezoneMode        string
-	timezoneHeaders     [3]string
-	anchorScope         string
-	betaFeatures        string
-	codexInstallationID string
-	sessionIDHyphen     string
-	sessionIDUnderscore string
-	threadID            string
-	clientRequestID     string
-	codexWindowID       string
-	proxyURL            string
+	// API-key gateways may bind these identities to the socket at upgrade.
+	// Fingerprint settings control generated identities, not whether an
+	// already sent identity can be silently replaced on a pooled socket.
+	apiKeySessionHeaders [6]string
+	timezoneMode         string
+	timezoneHeaders      [3]string
+	anchorScope          string
+	betaFeatures         string
+	codexInstallationID  string
+	sessionIDHyphen      string
+	sessionIDUnderscore  string
+	threadID             string
+	clientRequestID      string
+	codexWindowID        string
+	proxyURL             string
+	// reportedIdentity 是握手头中由请求头覆写变量（{{user_id}} 等）生成的部分。
+	// 握手头建连后不可变，上报身份不同的请求绝不能共用连接，否则用户会被张冠李戴。
+	reportedIdentity string
 }
 
 type openAIWSConnLease struct {
@@ -2442,8 +2449,14 @@ func normalizeOpenAIWSBetaFeatures(headers http.Header) string {
 
 func normalizeOpenAIWSHandshakeCompatibility(account *Account, headers http.Header) openAIWSHandshakeCompatibilityKey {
 	key := openAIWSHandshakeCompatibilityKey{
-		betaFeatures:    normalizeOpenAIWSBetaFeatures(headers),
-		timezoneHeaders: [3]string{headers.Get("Oai-Client-Timezone"), headers.Get("X-Openai-Timezone"), headers.Get("X-Timezone")},
+		reportedIdentity: account.headerOverrideReportedIdentity(headers),
+		betaFeatures:     normalizeOpenAIWSBetaFeatures(headers),
+		timezoneHeaders:  [3]string{headers.Get("Oai-Client-Timezone"), headers.Get("X-Openai-Timezone"), headers.Get("X-Timezone")},
+	}
+	if account != nil && account.Type == AccountTypeAPIKey {
+		for i, name := range [...]string{"session-id", "session_id", "thread-id", "thread_id", "conversation_id", "conversation-id"} {
+			key.apiKeySessionHeaders[i] = normalizeOpenAIWSStableIdentityHeader(headers, name)
+		}
 	}
 	mode := activeCodexFingerprintMode(account)
 	if mode == codexFingerprintOff {

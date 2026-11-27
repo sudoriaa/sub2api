@@ -6,21 +6,70 @@
     @close="handleClose"
   >
     <form
-      v-if="account"
+      v-if="editingAccount"
       id="edit-account-form"
       @submit.prevent="handleSubmit"
       class="space-y-5"
     >
-      <QwenPlatformNotice v-if="account?.platform === 'qwen'" :user-id="authStore.user?.id" />
-      <QwenCacheSettings v-if="account.platform === 'qwen' && account.type === 'apikey'" v-model:session-cache="qwenSessionCache" v-model:strict-affinity="qwenStrictAffinity" :user-id="authStore.user?.id" @base-url="setQwenBaseUrl" />
-      <div v-if="account.credentials?.oauth_initial_selected_models != null" data-testid="initial-model-scope-snapshot" class="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+      <div data-testid="edit-account-platform-section">
+        <label class="input-label flex items-center gap-2" for="edit-account-platform">
+          {{ t('admin.accounts.platform') }}
+          <NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.accountEditPlatform" :user-id="authStore.user?.id" />
+        </label>
+        <Select
+          id="edit-account-platform"
+          data-testid="edit-account-platform"
+          :model-value="editingAccount.platform"
+          :options="platformOptions"
+          :aria-label="t('admin.accounts.platform')"
+          aria-describedby="edit-account-platform-hint"
+          :disabled="platformOptions.length < 2 || submitting"
+          @update:model-value="changePlatform"
+        />
+        <p id="edit-account-platform-hint" class="input-hint">{{ t(platformOptions.length < 2 ? 'admin.accounts.platformSwitch.boundCredentials' : 'admin.accounts.platformSwitch.hint') }}</p>
+        <p v-if="platformChanged" class="mt-2 text-sm text-amber-600 dark:text-amber-400" role="status">
+          {{ t('admin.accounts.platformSwitch.resetHint') }}
+        </p>
+      </div>
+      <GatewayAccountFields v-if="editingAccount.type === 'gateway'" v-model:kind="gatewayKind" v-model:base-url="editBaseUrl"
+        v-model:api-key="editApiKey" v-model:probe="upstreamBillingAutoProbeEnabled" editing />
+      <GatewayModelSettings v-if="editingAccount.type === 'gateway'" v-model:models="allowedModels" v-model:mappings="modelMappings"
+        :sync-credentials="gatewaySyncCredentials" />
+      <QwenPlatformNotice v-if="editingAccount?.platform === 'qwen'" :user-id="authStore.user?.id" />
+      <div v-if="supportsDomesticRouteProbe" class="rounded-lg border border-gray-200 p-3 dark:border-dark-600">
+        <div class="flex items-center gap-2">
+          <label class="flex items-center gap-2 text-sm">
+            <input v-model="domesticRouteAutoSchedule" type="checkbox" data-testid="domestic-route-auto-schedule" />
+            {{ t('admin.accounts.domesticRouteAutoSchedule') }}
+          </label>
+          <NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.domesticRouteAutoSchedule" :user-id="authStore.user?.id" />
+        </div>
+        <p class="input-hint">{{ t('admin.accounts.domesticRouteAutoScheduleHint') }}</p>
+      </div>
+      <QwenCacheSettings v-if="editingAccount.platform === 'qwen' && editingAccount.type === 'apikey'" v-model:session-cache="qwenSessionCache" v-model:strict-affinity="qwenStrictAffinity" :user-id="authStore.user?.id" @base-url="setQwenBaseUrl" />
+      <div v-if="editingAccount.credentials?.oauth_initial_selected_models != null" data-testid="initial-model-scope-snapshot" class="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
         <div class="flex items-start gap-2"><p>{{ t('autoConfig.selection.accountHint') }}</p><NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.oauthInitialModelSelection" :user-id="authStore.user?.id" /></div>
         <label class="mt-2 flex items-center gap-2"><input v-model="releaseInitialModelSelection" data-testid="release-initial-model-selection" type="checkbox" />{{ t('autoConfig.selection.takeOver') }}</label>
       </div>
-      <AccountUpstreamChannelBinding v-if="show" :account-ids="[account.id]" />
+      <AccountUpstreamChannelBinding v-if="show" :account-ids="[editingAccount.id]" />
       <div>
-        <label class="input-label">{{ t('common.name') }}</label>
+        <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
+          <label class="input-label mb-0">{{ t('common.name') }}</label>
+          <UpstreamGroupSyncButton
+            :user-id="authStore.user?.id"
+            v-if="editingAccount.type === 'apikey' || (editingAccount.platform === 'antigravity' && editingAccount.type === 'upstream')"
+            v-model:name="form.name"
+            v-model:notes="form.notes"
+            :source="upstreamGroupSource"
+            :allow-auto="editingAccount.type === 'apikey'"
+            :auto="upstreamGroupSyncEnabled"
+            @update:auto="setUpstreamGroupSync"
+          />
+        </div>
         <input v-model="form.name" type="text" required class="input" data-tour="edit-account-form-name" />
+        <p v-if="editingAccount.type === 'apikey' && upstreamGroupSyncEnabled" class="input-hint">
+          {{ t('admin.accounts.upstreamBilling.autoSyncGroupHint') }}
+        </p>
       </div>
       <div>
         <label class="input-label">{{ t('admin.accounts.notes') }}</label>
@@ -33,19 +82,19 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
-      <OpenAIAuthConnections v-if="account.platform === 'openai' && account.type === 'oauth' && !isSparkShadow"
-        :account-id="account.id" :account-type="account.type" :active="show" />
+      <OpenAIAuthConnections v-if="editingAccount.platform === 'openai' && editingAccount.type === 'oauth' && !isSparkShadow"
+        :account-id="editingAccount.id" :account-type="editingAccount.type" :active="show" />
 
-      <SIWCAccountSettings v-if="account.platform === 'openai' && account.type === 'oauth' && !isSparkShadow"
-        v-model:enabled="siwcEnabled" :account-id="account.id" :active="show" />
+      <SIWCAccountSettings v-if="editingAccount.platform === 'openai' && editingAccount.type === 'oauth' && !isSparkShadow"
+        v-model:enabled="siwcEnabled" :account-id="editingAccount.id" :active="show" />
 
-      <div v-if="account.platform === 'openai' && account.type === 'oauth' && !isSparkShadow" class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800">
+      <div v-if="editingAccount.platform === 'openai' && editingAccount.type === 'oauth' && !isSparkShadow" class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800">
         <label class="flex items-center gap-2 text-sm"><input v-model="openaiModelAliases" type="checkbox" data-testid="openai-model-aliases" />{{ t('priorityScheduling.modelAliases') }}</label>
         <p class="input-hint">{{ t('priorityScheduling.modelAliasesHint') }}</p>
       </div>
 
       <div
-        v-if="account.platform === 'openai' && account.type === 'oauth' && !isSparkShadow && globalPrismEnabled"
+        v-if="editingAccount.platform === 'openai' && editingAccount.type === 'oauth' && !isSparkShadow && globalPrismEnabled"
         class="rounded-lg border border-gray-200 p-3 dark:border-dark-600"
         data-testid="openai-prism-browser-oauth-settings"
       >
@@ -68,7 +117,7 @@
       </div>
 
       <!-- API Key fields (only for apikey type) -->
-      <div v-if="account.type === 'apikey'" class="space-y-4">
+      <div v-if="editingAccount.type === 'apikey'" class="space-y-4">
         <div v-if="!isCNApiKeyAccount || editApiProtocol !== 'adaptive'">
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
@@ -76,25 +125,25 @@
             type="text"
             class="input"
             :placeholder="
-              account.platform === 'openai'
+              editingAccount.platform === 'openai'
                 ? 'https://api.openai.com'
-                : account.platform === 'gemini'
+                : editingAccount.platform === 'gemini'
                   ? 'https://generativelanguage.googleapis.com'
-                  : account.platform === 'antigravity'
+                  : editingAccount.platform === 'antigravity'
                     ? 'https://cloudcode-pa.googleapis.com'
-                    : account.platform === 'grok'
+                    : editingAccount.platform === 'grok'
                       ? 'https://api.x.ai/v1'
                       : 'https://api.anthropic.com'
             "
           />
           <p v-if="baseUrlHint" class="input-hint">{{ baseUrlHint }}</p>
           <GrokBaseUrlPresets
-            v-if="account.platform === 'grok'"
+            v-if="editingAccount.platform === 'grok'"
             class="mt-2"
             @select="editBaseUrl = $event"
           />
           <CnBaseUrlPresets
-            v-if="isCNApiKeyAccount && isCNProviderPlatform(account.platform)"
+            v-if="isCNApiKeyAccount && isCNProviderPlatform(editingAccount.platform)"
             class="mt-2"
             :platform="cnPresetPlatform"
             :mode="cnPresetMode"
@@ -113,12 +162,12 @@
               <input v-model="editAdaptiveBaseUrls[item.value]" type="text" class="input" />
             </div>
           </div>
-          <p v-if="!cnSupportsNativeResponses(account.platform, currentOpenCodeOrCNMode())" class="input-hint">
+          <p v-if="!cnSupportsNativeResponses(editingAccount.platform, currentOpenCodeOrCNMode())" class="input-hint">
             {{ t('admin.accounts.cnProviders.apiProtocol.responsesFallbackDesc') }}
           </p>
         </div>
         <!-- OpenCode Zen vs GO -->
-        <div v-if="isCNApiKeyAccount && account.platform === 'opencode_go'">
+        <div v-if="isCNApiKeyAccount && editingAccount.platform === 'opencode_go'">
           <label class="input-label">{{ t('admin.accounts.cnProviders.accountMode.title') }}</label>
           <div class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <button
@@ -190,7 +239,7 @@
           </div>
         </div>
         <!-- Account Mode Selection (CN providers) -->
-        <div v-if="isCNApiKeyAccount && isCNProviderPlatform(account.platform)">
+        <div v-if="isCNApiKeyAccount && isCNProviderPlatform(editingAccount.platform)">
           <label class="input-label">{{ t('admin.accounts.cnProviders.accountMode.title') }}</label>
           <div class="mt-2 flex flex-wrap gap-2">
             <button
@@ -232,13 +281,13 @@
           <p class="input-hint">{{ t(`admin.accounts.cnProviders.apiProtocol.${cnProtocolDescKey}Desc`) }}</p>
         </div>
         <OpenCodeGoProtocolRulesEditor
-          v-if="isCNApiKeyAccount && providerRoutesByModel(account.platform) && editApiProtocol === 'adaptive'"
+          v-if="isCNApiKeyAccount && providerRoutesByModel(editingAccount.platform) && editApiProtocol === 'adaptive'"
           v-model:rows="editOpenCodeGoProtocolRules"
-          :platform="account.platform"
+          :platform="editingAccount.platform"
           :plan="currentOpenCodeOrCNMode()"
         />
         <!-- Zhipu 团队版 Coding Plan：组织/项目 ID（可选，填写后用量查询走团队版端点） -->
-        <div v-if="account.platform === 'zhipu' && editAccountMode === 'coding'">
+        <div v-if="editingAccount.platform === 'zhipu' && editAccountMode === 'coding'">
           <div class="flex items-center">
             <label class="input-label">{{ t('admin.accounts.cnProviders.zhipuTeam.title') }}</label>
             <HelpTooltip trigger="click" width-class="w-80">
@@ -277,15 +326,15 @@
             data-lpignore="true"
             data-bwignore="true"
             :placeholder="
-              account.platform === 'openai'
+              editingAccount.platform === 'openai'
                 ? 'sk-proj-...'
-                : account.platform === 'gemini'
+                : editingAccount.platform === 'gemini'
                   ? 'AQ.Ab...'
-                  : account.platform === 'antigravity'
+                  : editingAccount.platform === 'antigravity'
                     ? 'sk-...'
-                    : account.platform === 'grok'
+                    : editingAccount.platform === 'grok'
                       ? 'xai-...'
-                      : account.platform === 'mistral'
+                      : editingAccount.platform === 'mistral'
                         ? 'API Key'
                         : 'sk-ant-...'
             "
@@ -295,9 +344,9 @@
 
         <!-- Model Restriction Section (不适用于 Antigravity) -->
         <div
-          v-if="account.platform !== 'antigravity'"
+          v-if="editingAccount.platform !== 'antigravity'"
           class="border-t border-gray-200 pt-4 dark:border-dark-600"
-          :data-testid="account.platform === 'grok' ? 'grok-model-settings' : undefined"
+          :data-testid="editingAccount.platform === 'grok' ? 'grok-model-settings' : undefined"
         >
           <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
 
@@ -313,16 +362,16 @@
           <template v-else>
             <!-- Mode Toggle -->
             <div
-              :data-testid="account.platform === 'grok' ? 'grok-model-mode-tabs' : undefined"
-              :class="account.platform === 'grok'
+              :data-testid="editingAccount.platform === 'grok' ? 'grok-model-mode-tabs' : undefined"
+              :class="editingAccount.platform === 'grok'
                 ? 'mb-4 flex gap-1 rounded-xl bg-gray-100 p-1 dark:bg-dark-900'
                 : 'mb-4 flex gap-2'"
             >
               <button
                 type="button"
                 @click="modelRestrictionMode = 'whitelist'"
-                :aria-pressed="account.platform === 'grok' ? modelRestrictionMode === 'whitelist' : undefined"
-                :class="account.platform === 'grok'
+                :aria-pressed="editingAccount.platform === 'grok' ? modelRestrictionMode === 'whitelist' : undefined"
+                :class="editingAccount.platform === 'grok'
                   ? [
                       'rounded-lg px-3 py-2 text-sm',
                       modelRestrictionMode === 'whitelist'
@@ -337,7 +386,7 @@
                     ]"
               >
                 <svg
-                  v-if="account.platform !== 'grok'"
+                  v-if="editingAccount.platform !== 'grok'"
                   class="mr-1.5 inline h-4 w-4"
                   fill="none"
                   viewBox="0 0 24 24"
@@ -355,8 +404,8 @@
               <button
                 type="button"
                 @click="modelRestrictionMode = 'mapping'"
-                :aria-pressed="account.platform === 'grok' ? modelRestrictionMode === 'mapping' : undefined"
-                :class="account.platform === 'grok'
+                :aria-pressed="editingAccount.platform === 'grok' ? modelRestrictionMode === 'mapping' : undefined"
+                :class="editingAccount.platform === 'grok'
                   ? [
                       'rounded-lg px-3 py-2 text-sm',
                       modelRestrictionMode === 'mapping'
@@ -371,7 +420,7 @@
                     ]"
               >
                 <svg
-                  v-if="account.platform !== 'grok'"
+                  v-if="editingAccount.platform !== 'grok'"
                   class="mr-1.5 inline h-4 w-4"
                   fill="none"
                   viewBox="0 0 24 24"
@@ -389,13 +438,13 @@
             </div>
 
             <GrokModelDiagnosticsPanel
-              v-if="account.platform === 'grok'"
-              :key="'grok-diagnostics-' + account.id"
+              v-if="editingAccount.platform === 'grok'"
+              :key="'grok-diagnostics-' + editingAccount.id"
               :diagnostics="grokDiagnostics"
               :loading="diagnosticsLoading"
               :dirty="grokDiagnosticsDirty"
               :refresh-failed="diagnosticsRefreshFailed"
-              :can-sync="Boolean(account.id)"
+              :can-sync="!platformChanged && Boolean(editingAccount.id)"
               :syncing="isGrokCatalogSyncing"
               @sync="requestGrokCatalogSync"
             />
@@ -405,9 +454,9 @@
               v-show="modelRestrictionMode === 'whitelist'"
               v-model="allowedModels"
               v-model:model-mappings="modelMappings"
-              :platform="account?.platform || 'anthropic'"
-              :account-id="account?.id"
-              :show-sync-button="account.platform !== 'grok' || !account.id"
+              :platform="editingAccount?.platform || 'anthropic'"
+              :account-id="platformChanged ? undefined : editingAccount?.id"
+              :show-sync-button="editingAccount.platform !== 'grok' || !editingAccount.id"
               @upstream-sync-finished="refreshGrokDiagnostics"
             />
 
@@ -422,11 +471,11 @@
             </div>
 
             <!-- Mapping Mode -->
-            <div v-else :data-testid="account.platform === 'grok' ? 'grok-model-mapping-editor' : undefined">
-              <div :class="account.platform === 'grok' ? 'mb-3' : 'mb-3 rounded-lg bg-purple-50 p-3 dark:bg-purple-900/20'">
-                <p :class="account.platform === 'grok' ? 'text-xs text-gray-500 dark:text-dark-400' : 'text-xs text-purple-700 dark:text-purple-400'">
+            <div v-else :data-testid="editingAccount.platform === 'grok' ? 'grok-model-mapping-editor' : undefined">
+              <div :class="editingAccount.platform === 'grok' ? 'mb-3' : 'mb-3 rounded-lg bg-purple-50 p-3 dark:bg-purple-900/20'">
+                <p :class="editingAccount.platform === 'grok' ? 'text-xs text-gray-500 dark:text-dark-400' : 'text-xs text-purple-700 dark:text-purple-400'">
                   <svg
-                    v-if="account.platform !== 'grok'"
+                    v-if="editingAccount.platform !== 'grok'"
                     class="mr-1 inline h-4 w-4"
                     fill="none"
                     viewBox="0 0 24 24"
@@ -444,7 +493,7 @@
               </div>
 
               <div
-                v-if="account.platform === 'grok'"
+                v-if="editingAccount.platform === 'grok'"
                 class="mb-1.5 grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1.2fr)_2rem] gap-1.5 text-xs text-gray-500 dark:text-dark-400 sm:gap-2"
               >
                 <span>{{ t('admin.accounts.grokModelDiagnostics.requestColumn') }}</span>
@@ -457,20 +506,20 @@
               <div
                 v-for="(mapping, index) in modelMappings"
                 :key="getModelMappingKey(mapping)"
-                :data-testid="account.platform === 'grok' ? 'grok-model-mapping-row' : undefined"
-                :class="account.platform === 'grok'
+                :data-testid="editingAccount.platform === 'grok' ? 'grok-model-mapping-row' : undefined"
+                :class="editingAccount.platform === 'grok'
                   ? 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1.2fr)_2rem] items-center gap-1.5 sm:gap-2'
                   : 'flex items-center gap-2'"
               >
                 <input
                   v-model="mapping.from"
                   type="text"
-                  :aria-label="account.platform === 'grok' ? t('admin.accounts.grokModelDiagnostics.mappingFromAria', { index: index + 1 }) : undefined"
-                  :class="account.platform === 'grok' ? 'input min-w-0 w-full font-mono text-xs' : 'input flex-1'"
+                  :aria-label="editingAccount.platform === 'grok' ? t('admin.accounts.grokModelDiagnostics.mappingFromAria', { index: index + 1 }) : undefined"
+                  :class="editingAccount.platform === 'grok' ? 'input min-w-0 w-full font-mono text-xs' : 'input flex-1'"
                   :placeholder="t('admin.accounts.requestModel')"
                 />
                 <Icon
-                  v-if="account.platform === 'grok'"
+                  v-if="editingAccount.platform === 'grok'"
                   name="arrowRight"
                   size="sm"
                   aria-hidden="true"
@@ -493,19 +542,19 @@
                 <input
                   v-model="mapping.to"
                   type="text"
-                  :aria-label="account.platform === 'grok' ? t('admin.accounts.grokModelDiagnostics.mappingTargetAria', { index: index + 1 }) : undefined"
-                  :class="account.platform === 'grok' ? 'input min-w-0 w-full font-mono text-xs' : 'input flex-1'"
+                  :aria-label="editingAccount.platform === 'grok' ? t('admin.accounts.grokModelDiagnostics.mappingTargetAria', { index: index + 1 }) : undefined"
+                  :class="editingAccount.platform === 'grok' ? 'input min-w-0 w-full font-mono text-xs' : 'input flex-1'"
                   :placeholder="t('admin.accounts.actualModel')"
                 />
                 <button
                   type="button"
                   @click="removeModelMapping(index)"
-                  :aria-label="account.platform === 'grok' ? t('admin.accounts.grokModelDiagnostics.removeMappingAria', { index: index + 1 }) : undefined"
-                  :class="account.platform === 'grok'
+                  :aria-label="editingAccount.platform === 'grok' ? t('admin.accounts.grokModelDiagnostics.removeMappingAria', { index: index + 1 }) : undefined"
+                  :class="editingAccount.platform === 'grok'
                     ? 'rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-gray-400 dark:hover:bg-dark-700'
                     : 'rounded-lg p-2 text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20'"
                 >
-                  <Icon v-if="account.platform === 'grok'" name="trash" size="sm" aria-hidden="true" />
+                  <Icon v-if="editingAccount.platform === 'grok'" name="trash" size="sm" aria-hidden="true" />
                   <svg v-else class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path
                       stroke-linecap="round"
@@ -521,8 +570,8 @@
             <button
               type="button"
               @click="addModelMapping"
-              :data-testid="account.platform === 'grok' ? 'grok-model-mapping-add' : undefined"
-              :class="account.platform === 'grok'
+              :data-testid="editingAccount.platform === 'grok' ? 'grok-model-mapping-add' : undefined"
+              :class="editingAccount.platform === 'grok'
                 ? 'mb-3 inline-flex items-center gap-1 py-2 text-xs text-primary-700 dark:text-primary-300'
                 : 'mb-3 w-full rounded-lg border-2 border-dashed border-gray-300 px-4 py-2 text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-dark-500 dark:text-gray-400 dark:hover:border-dark-400 dark:hover:text-gray-300'"
             >
@@ -624,7 +673,7 @@
 
         <!-- Gemini 显式缓存上游开关：仅自定义地址的 Gemini API Key 账号 -->
         <div
-          v-if="account.platform === 'gemini' && !isOfficialGeminiBaseUrl(editBaseUrl)"
+          v-if="editingAccount.platform === 'gemini' && !isOfficialGeminiBaseUrl(editBaseUrl)"
           class="border-t border-gray-200 pt-4 dark:border-dark-600"
           data-testid="explicit-cache-upstream-section"
         >
@@ -765,7 +814,7 @@
       </div>
 
       <div
-        v-if="account.platform === 'grok'"
+        v-if="editingAccount.platform === 'grok'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -786,7 +835,7 @@
 
       <!-- Grok OAuth client-tool prompt cache opt-in -->
       <div
-        v-if="account.platform === 'grok' && account.type === 'oauth'"
+        v-if="editingAccount.platform === 'grok' && editingAccount.type === 'oauth'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -857,7 +906,7 @@
 
       <!-- Grok OAuth Custom Upstream URL (仅改写转发端点，OAuth 授权/刷新不受影响) -->
       <div
-        v-if="account.platform === 'grok' && account.type === 'oauth'"
+        v-if="editingAccount.platform === 'grok' && editingAccount.type === 'oauth'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="mb-3 flex items-center justify-between">
@@ -931,7 +980,10 @@
           </div>
 
           <HeaderOverrideEditor
+
+            :user-id="authStore.user?.id"
             :rows="headerOverrideRows"
+            :allow-variables="headerOverrideAllowVariables"
             @update:rows="headerOverrideRows = $event"
           />
         </div>
@@ -939,9 +991,9 @@
 
       <!-- OpenAI/Grok OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
       <div
-        v-if="(account.platform === 'openai' || account.platform === 'grok') && account.type === 'oauth'"
+        v-if="(editingAccount.platform === 'openai' || editingAccount.platform === 'grok') && editingAccount.type === 'oauth'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
-        :data-testid="account.platform === 'grok' ? 'grok-model-settings' : undefined"
+        :data-testid="editingAccount.platform === 'grok' ? 'grok-model-settings' : undefined"
       >
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
 
@@ -957,16 +1009,16 @@
         <template v-else>
           <!-- Mode Toggle -->
           <div
-            :data-testid="account.platform === 'grok' ? 'grok-model-mode-tabs' : undefined"
-            :class="account.platform === 'grok'
+            :data-testid="editingAccount.platform === 'grok' ? 'grok-model-mode-tabs' : undefined"
+            :class="editingAccount.platform === 'grok'
               ? 'mb-4 flex gap-1 rounded-xl bg-gray-100 p-1 dark:bg-dark-900'
               : 'mb-4 flex gap-2'"
           >
             <button
               type="button"
               @click="modelRestrictionMode = 'whitelist'"
-              :aria-pressed="account.platform === 'grok' ? modelRestrictionMode === 'whitelist' : undefined"
-              :class="account.platform === 'grok'
+              :aria-pressed="editingAccount.platform === 'grok' ? modelRestrictionMode === 'whitelist' : undefined"
+              :class="editingAccount.platform === 'grok'
                 ? [
                     'rounded-lg px-3 py-2 text-sm',
                     modelRestrictionMode === 'whitelist'
@@ -985,8 +1037,8 @@
             <button
               type="button"
               @click="modelRestrictionMode = 'mapping'"
-              :aria-pressed="account.platform === 'grok' ? modelRestrictionMode === 'mapping' : undefined"
-              :class="account.platform === 'grok'
+              :aria-pressed="editingAccount.platform === 'grok' ? modelRestrictionMode === 'mapping' : undefined"
+              :class="editingAccount.platform === 'grok'
                 ? [
                     'rounded-lg px-3 py-2 text-sm',
                     modelRestrictionMode === 'mapping'
@@ -1005,13 +1057,13 @@
           </div>
 
           <GrokModelDiagnosticsPanel
-            v-if="account.platform === 'grok'"
-            :key="'grok-diagnostics-' + account.id"
+            v-if="editingAccount.platform === 'grok'"
+            :key="'grok-diagnostics-' + editingAccount.id"
             :diagnostics="grokDiagnostics"
             :loading="diagnosticsLoading"
             :dirty="grokDiagnosticsDirty"
             :refresh-failed="diagnosticsRefreshFailed"
-            :can-sync="Boolean(account.id)"
+            :can-sync="!platformChanged && Boolean(editingAccount.id)"
             :syncing="isGrokCatalogSyncing"
             @sync="requestGrokCatalogSync"
           />
@@ -1021,9 +1073,9 @@
             v-show="modelRestrictionMode === 'whitelist'"
             v-model="allowedModels"
             v-model:model-mappings="modelMappings"
-            :platform="account?.platform || 'anthropic'"
-            :account-id="account?.id"
-            :show-sync-button="account.platform !== 'grok' || !account.id"
+            :platform="editingAccount?.platform || 'anthropic'"
+            :account-id="platformChanged ? undefined : editingAccount?.id"
+            :show-sync-button="editingAccount.platform !== 'grok' || !editingAccount.id"
             @upstream-sync-finished="refreshGrokDiagnostics"
           />
 
@@ -1038,15 +1090,15 @@
           </div>
 
           <!-- Mapping Mode -->
-          <div v-else :data-testid="account.platform === 'grok' ? 'grok-model-mapping-editor' : undefined">
-            <div :class="account.platform === 'grok' ? 'mb-3' : 'mb-3 rounded-lg bg-purple-50 p-3 dark:bg-purple-900/20'">
-              <p :class="account.platform === 'grok' ? 'text-xs text-gray-500 dark:text-dark-400' : 'text-xs text-purple-700 dark:text-purple-400'">
+          <div v-else :data-testid="editingAccount.platform === 'grok' ? 'grok-model-mapping-editor' : undefined">
+            <div :class="editingAccount.platform === 'grok' ? 'mb-3' : 'mb-3 rounded-lg bg-purple-50 p-3 dark:bg-purple-900/20'">
+              <p :class="editingAccount.platform === 'grok' ? 'text-xs text-gray-500 dark:text-dark-400' : 'text-xs text-purple-700 dark:text-purple-400'">
                 {{ t('admin.accounts.mapRequestModels') }}
               </p>
             </div>
 
             <div
-              v-if="account.platform === 'grok'"
+              v-if="editingAccount.platform === 'grok'"
               class="mb-1.5 grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1.2fr)_2rem] gap-1.5 text-xs text-gray-500 dark:text-dark-400 sm:gap-2"
             >
               <span>{{ t('admin.accounts.grokModelDiagnostics.requestColumn') }}</span>
@@ -1058,20 +1110,20 @@
               <div
                 v-for="(mapping, index) in modelMappings"
                 :key="'oauth-' + getModelMappingKey(mapping)"
-                :data-testid="account.platform === 'grok' ? 'grok-model-mapping-row' : undefined"
-                :class="account.platform === 'grok'
+                :data-testid="editingAccount.platform === 'grok' ? 'grok-model-mapping-row' : undefined"
+                :class="editingAccount.platform === 'grok'
                   ? 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1.2fr)_2rem] items-center gap-1.5 sm:gap-2'
                   : 'flex items-center gap-2'"
               >
                 <input
                   v-model="mapping.from"
                   type="text"
-                  :aria-label="account.platform === 'grok' ? t('admin.accounts.grokModelDiagnostics.mappingFromAria', { index: index + 1 }) : undefined"
-                  :class="account.platform === 'grok' ? 'input min-w-0 w-full font-mono text-xs' : 'input flex-1'"
+                  :aria-label="editingAccount.platform === 'grok' ? t('admin.accounts.grokModelDiagnostics.mappingFromAria', { index: index + 1 }) : undefined"
+                  :class="editingAccount.platform === 'grok' ? 'input min-w-0 w-full font-mono text-xs' : 'input flex-1'"
                   :placeholder="t('admin.accounts.requestModel')"
                 />
                 <Icon
-                  v-if="account.platform === 'grok'"
+                  v-if="editingAccount.platform === 'grok'"
                   name="arrowRight"
                   size="sm"
                   aria-hidden="true"
@@ -1094,19 +1146,19 @@
                 <input
                   v-model="mapping.to"
                   type="text"
-                  :aria-label="account.platform === 'grok' ? t('admin.accounts.grokModelDiagnostics.mappingTargetAria', { index: index + 1 }) : undefined"
-                  :class="account.platform === 'grok' ? 'input min-w-0 w-full font-mono text-xs' : 'input flex-1'"
+                  :aria-label="editingAccount.platform === 'grok' ? t('admin.accounts.grokModelDiagnostics.mappingTargetAria', { index: index + 1 }) : undefined"
+                  :class="editingAccount.platform === 'grok' ? 'input min-w-0 w-full font-mono text-xs' : 'input flex-1'"
                   :placeholder="t('admin.accounts.actualModel')"
                 />
                 <button
                   type="button"
                   @click="removeModelMapping(index)"
-                  :aria-label="account.platform === 'grok' ? t('admin.accounts.grokModelDiagnostics.removeMappingAria', { index: index + 1 }) : undefined"
-                  :class="account.platform === 'grok'
+                  :aria-label="editingAccount.platform === 'grok' ? t('admin.accounts.grokModelDiagnostics.removeMappingAria', { index: index + 1 }) : undefined"
+                  :class="editingAccount.platform === 'grok'
                     ? 'rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-gray-400 dark:hover:bg-dark-700'
                     : 'rounded-lg p-2 text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20'"
                 >
-                  <Icon v-if="account.platform === 'grok'" name="trash" size="sm" aria-hidden="true" />
+                  <Icon v-if="editingAccount.platform === 'grok'" name="trash" size="sm" aria-hidden="true" />
                   <svg v-else class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path
                       stroke-linecap="round"
@@ -1122,8 +1174,8 @@
             <button
               type="button"
               @click="addModelMapping"
-              :data-testid="account.platform === 'grok' ? 'grok-model-mapping-add' : undefined"
-              :class="account.platform === 'grok'
+              :data-testid="editingAccount.platform === 'grok' ? 'grok-model-mapping-add' : undefined"
+              :class="editingAccount.platform === 'grok'
                 ? 'mb-3 inline-flex items-center gap-1 py-2 text-xs text-primary-700 dark:text-primary-300'
                 : 'mb-3 w-full rounded-lg border-2 border-dashed border-gray-300 px-4 py-2 text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-dark-500 dark:text-gray-400 dark:hover:border-dark-400 dark:hover:text-gray-300'"
             >
@@ -1147,7 +1199,7 @@
       </div>
 
       <!-- Upstream fields (only for upstream type) -->
-      <div v-if="account.type === 'upstream'" class="space-y-4">
+      <div v-if="editingAccount.type === 'upstream'" class="space-y-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.upstream.baseUrl') }}</label>
           <input
@@ -1171,7 +1223,7 @@
       </div>
 
       <!-- Vertex Service Account -->
-      <div v-if="(account.platform === 'gemini' || account.platform === 'anthropic') && account.type === 'service_account'" class="space-y-4">
+      <div v-if="(editingAccount.platform === 'gemini' || editingAccount.platform === 'anthropic') && editingAccount.type === 'service_account'" class="space-y-4">
         <div v-if="isVertexAPIKeyMode">
           <label class="input-label">API Key</label>
           <input
@@ -1207,7 +1259,7 @@
             <p class="input-hint">{{ t('admin.accounts.vertexSaJsonEditHint') }}</p>
           </div>
           <div v-if="!isVertexAPIKeyMode || editVertexProjectId.trim()">
-            <label class="input-label">Location</label>
+            <label class="input-label">Location <NewFeatureBadge v-if="authStore.user?.id != null" :notice-id="NEW_FEATURE_NOTICES.vertexMultiRegion" :user-id="authStore.user?.id" /></label>
             <select
               v-model="editVertexLocation"
               required
@@ -1291,7 +1343,7 @@
 
           <!-- Whitelist Mode -->
           <div v-if="modelRestrictionMode === 'whitelist'">
-            <ModelWhitelistSelector v-model="allowedModels" v-model:model-mappings="modelMappings" :platform="account?.platform || 'anthropic'" :account-id="account?.id" />
+            <ModelWhitelistSelector v-model="allowedModels" v-model:model-mappings="modelMappings" :platform="editingAccount?.platform || 'anthropic'" :account-id="platformChanged ? undefined : editingAccount?.id" />
             <p class="text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
               <span v-if="allowedModels.length === 0 && modelMappings.length === 0">{{
@@ -1408,7 +1460,7 @@
       </div>
 
       <!-- Bedrock fields (for bedrock type, both SigV4 and API Key modes) -->
-      <div v-if="account.type === 'bedrock'" class="space-y-4">
+      <div v-if="editingAccount.type === 'bedrock'" class="space-y-4">
         <!-- SigV4 fields -->
         <template v-if="!isBedrockAPIKeyMode">
           <div>
@@ -1614,7 +1666,7 @@
       </div>
 
       <div
-        v-if="account.platform === 'antigravity' && account.type === 'oauth'"
+        v-if="editingAccount.platform === 'antigravity' && editingAccount.type === 'oauth'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <label class="input-label">{{ t('admin.accounts.antigravityProjectIdLabel') }}</label>
@@ -1630,7 +1682,7 @@
 
       <!-- Antigravity model restriction (applies to all antigravity types) -->
       <!-- Antigravity 只支持模型映射模式，不支持白名单模式 -->
-      <div v-if="account.platform === 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+      <div v-if="editingAccount.platform === 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
 
         <!-- Mapping Mode Only (no toggle for Antigravity) -->
@@ -1643,7 +1695,7 @@
             <button
               type="button"
               @click="syncAntigravityUpstreamModels"
-              :disabled="isSyncingAntigravityUpstream || !account?.id"
+              :disabled="isSyncingAntigravityUpstream || !editingAccount?.id"
               class="rounded-lg border border-emerald-200 px-3 py-1.5 text-sm text-emerald-600 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-800 dark:text-emerald-400 dark:hover:bg-emerald-900/30"
             >
               {{ isSyncingAntigravityUpstream ? t('admin.accounts.syncUpstreamModelsLoading') : t('admin.accounts.syncUpstreamModels') }}
@@ -2018,7 +2070,7 @@
 
       <!-- Intercept Warmup Requests (Anthropic/Antigravity) -->
       <div
-        v-if="account?.platform === 'anthropic' || account?.platform === 'antigravity'"
+        v-if="editingAccount?.platform === 'anthropic' || editingAccount?.platform === 'antigravity'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between">
@@ -2055,15 +2107,15 @@
         </div>
         <OpenAIProxySettings v-if="openaiProxySupported"
           v-model:mode="openaiProxyMode" v-model:single-proxy-id="form.proxy_id" v-model:proxy-ids="openaiProxyIds"
-          :proxies="proxies" :loading="proxiesLoading" :load-error="proxiesLoadError" :current-account-id="account.id"
+          :proxies="proxies" :loading="proxiesLoading" :load-error="proxiesLoadError" :current-account-id="editingAccount.id"
           :user-id="authStore.user?.id" @retry="emit('retry-proxies')" />
         <ProxySelector v-else v-model="form.proxy_id" :proxies="proxies" />
       </div>
 
       <UpstreamRequestIdHeaderField
         v-model="upstreamRequestIdHeader"
-        :platform="account.platform"
-        :type="account.type"
+        :platform="editingAccount.platform"
+        :type="editingAccount.type"
       />
 
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -2112,7 +2164,7 @@
           </p>
           <p v-if="isNewAPIUpstream" class="input-hint mt-3">{{ t('admin.accounts.upstreamBilling.newAPI.groupRatioHint') }}</p>
           <div
-            v-if="account?.type === 'apikey' && !isNewAPIUpstream"
+            v-if="editingAccount?.type === 'apikey' && !isNewAPIUpstream"
             class="mt-3 flex items-center justify-between gap-3"
           >
             <div class="min-w-0">
@@ -2120,7 +2172,7 @@
                 {{ t('admin.accounts.upstreamBilling.syncRate') }}
               </p>
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                {{ t(account?.extra?.upstream_billing_probe?.data?.billing_mode === 'multi_group' ? 'admin.accounts.upstreamBilling.multiGroupSyncPaused' : 'admin.accounts.upstreamBilling.syncRateHint') }}
+                {{ t(editingAccount?.extra?.upstream_billing_probe?.data?.billing_mode === 'multi_group' ? 'admin.accounts.upstreamBilling.multiGroupSyncPaused' : 'admin.accounts.upstreamBilling.syncRateHint') }}
               </p>
             </div>
             <Toggle
@@ -2134,7 +2186,7 @@
         <div>
           <div class="mb-2 flex items-center justify-between gap-1">
             <label class="input-label mb-0" for="account-cost-multiplier">{{ t('admin.accounts.costMultiplier') }}</label>
-            <div v-if="account?.type === 'apikey' && !isNewAPIUpstream" class="flex shrink-0 items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+            <div v-if="editingAccount?.type === 'apikey'" class="flex shrink-0 items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
               <span>{{ t('admin.accounts.costMultiplierAutoSync') }}</span>
               <Toggle
                 v-model="costMultiplierAutoSync"
@@ -2153,8 +2205,18 @@
             required
             class="input"
             data-testid="account-cost-multiplier"
+            :disabled="isNewAPIUpstream && costMultiplierAutoSync"
           />
           <p class="input-hint">{{ t('admin.accounts.costMultiplierHint') }}</p>
+          <fieldset v-if="editingAccount?.type !== 'gateway'" class="mt-3">
+            <legend class="input-label">{{ t('profitOps.imagePurchasePrices') }}</legend>
+            <div class="grid grid-cols-3 gap-2">
+              <label v-for="tier in purchaseTiers" :key="tier">{{ tier }}
+                <input v-model="imagePurchasePrices[tier]" class="input" type="number" min="0" max="1000000" step="any" />
+              </label>
+            </div>
+          </fieldset>
+          <p v-if="isNewAPIUpstream" class="input-hint">{{ t('admin.accounts.upstreamBilling.newAPI.costManagedHint') }}</p>
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.groupBillingRateMultiplier') }}</label>
@@ -2169,9 +2231,10 @@
           <p class="input-hint">{{ t('admin.accounts.groupBillingRateMultiplierHint') }}</p>
         </div>
       </div>
+      <ProbePenaltySettings v-if="editingAccount?.platform === 'anthropic'" v-model:enabled="probePenaltyEnabled" v-model:minimum="probePenaltyMinimum" />
       <!-- OpenAI OAuth RPM limit -->
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'oauth'"
+        v-if="editingAccount?.platform === 'openai' && editingAccount?.type === 'oauth'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <AccountRpmSettings
@@ -2198,7 +2261,7 @@
         </p>
       </div>
 
-      <div v-if="account?.platform === 'openai' && account?.type === 'apikey'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+      <div v-if="editingAccount?.platform === 'openai' && editingAccount?.type === 'apikey'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <label class="flex items-center gap-2">
           <input v-model="copilotSDKEnabled" type="checkbox" data-testid="copilot-sdk-toggle" />
           <span>Copilot SDK</span>
@@ -2206,7 +2269,7 @@
         <p class="input-hint">{{ t('admin.accounts.openai.copilotSDKDesc') }}</p>
       </div>
 
-      <div v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow && globalBpsEnabled"
+      <div v-if="editingAccount?.platform === 'openai' && editingAccount?.type === 'oauth' && !isSparkShadow && globalBpsEnabled"
         class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="flex items-center justify-between gap-4">
           <div>
@@ -2333,7 +2396,7 @@
 
       <!-- OpenAI 自动透传开关（OAuth/API Key） -->
       <div
-        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
+        v-if="editingAccount?.platform === 'openai' && (editingAccount?.type === 'oauth' || editingAccount?.type === 'setup-token' || editingAccount?.type === 'apikey')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between">
@@ -2345,6 +2408,7 @@
           </div>
           <button
             type="button"
+            data-testid="edit-openai-passthrough-toggle"
             @click="openaiPassthroughEnabled = !openaiPassthroughEnabled"
             :class="[
               'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
@@ -2359,19 +2423,34 @@
             />
           </button>
         </div>
+        <label v-if="openaiPassthroughEnabled" class="mt-3 flex items-start gap-2">
+          <input
+            v-model="openaiPassthroughModelFilterEnabled"
+            type="checkbox"
+            data-testid="edit-openai-passthrough-model-filter"
+            class="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+          <span class="text-sm">
+            {{ t('admin.accounts.openai.passthroughModelFilter') }}
+            <NewFeatureBadge v-if="authStore.user?.id != null" :notice-id="NEW_FEATURE_NOTICES.passthroughModelFilter" :user-id="authStore.user?.id" />
+            <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.passthroughModelFilterDesc') }}
+            </span>
+          </span>
+        </label>
       </div>
 
-      <OpenAIRequestTimezoneField v-if="account?.platform === 'openai'" v-model="openAIRequestTimezone" />
+      <OpenAIRequestTimezoneField v-if="editingAccount?.platform === 'openai'" v-model="openAIRequestTimezone" />
       <ExtraImageModelsField
-        v-if="account?.platform === 'openai' && account?.type === 'apikey'"
+        v-if="editingAccount?.platform === 'openai' && editingAccount?.type === 'apikey'"
         v-model:models="extraImageModels"
         v-model:prefixes="extraImageModelPrefixes"
       />
-      <ExcelBPSCredentialStatus :state="account?.excel_bps_credential_state" />
+      <ExcelBPSCredentialStatus :state="editingAccount?.excel_bps_credential_state" />
 
       <!-- OpenAI Codex namespace 工具摊平（兼容开关，仅 OAuth） -->
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'oauth'"
+        v-if="editingAccount?.platform === 'openai' && editingAccount?.type === 'oauth'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between">
@@ -2402,7 +2481,7 @@
 
       <!-- OpenAI Codex hosted image_generation bridge policy -->
       <div
-        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
+        v-if="editingAccount?.platform === 'openai' && (editingAccount?.type === 'oauth' || editingAccount?.type === 'setup-token' || editingAccount?.type === 'apikey')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="overflow-hidden rounded-lg border border-sky-100 bg-sky-50/60 shadow-sm dark:border-sky-900/50 dark:bg-sky-950/20">
@@ -2462,7 +2541,7 @@
 
       <!-- OpenAI WS Mode 三态（off/ctx_pool/passthrough） -->
       <div
-        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
+        v-if="editingAccount?.platform === 'openai' && (editingAccount?.type === 'oauth' || editingAccount?.type === 'setup-token' || editingAccount?.type === 'apikey')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between">
@@ -2482,7 +2561,7 @@
       </div>
 
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'oauth'"
+        v-if="editingAccount?.platform === 'openai' && editingAccount?.type === 'oauth'"
         class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div>
@@ -2500,7 +2579,7 @@
 
       <!-- OpenAI APIKey Responses API support mode -->
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'apikey'"
+        v-if="editingAccount?.platform === 'openai' && editingAccount?.type === 'apikey'"
         class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -2535,20 +2614,23 @@
         <div>
           <label class="input-label mb-2 block">{{ t('admin.accounts.openai.endpointCapabilities') }}</label>
           <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <label
+            <div
               v-for="option in openAIEndpointCapabilityOptions"
               :key="option.value"
-              class="flex cursor-pointer items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-dark-600"
+              class="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-dark-600"
             >
-              <input
-                type="checkbox"
-                class="rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500"
-                :data-testid="`openai-endpoint-capability-${option.value}`"
-                :checked="openAIEndpointCapabilities.includes(option.value)"
-                @change="toggleOpenAIEndpointCapability(option.value, $event)"
-              />
-              <span class="text-gray-700 dark:text-gray-200">{{ option.label }}</span>
-            </label>
+              <label class="flex flex-1 cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox"
+                  class="rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500"
+                  :data-testid="`openai-endpoint-capability-${option.value}`"
+                  :checked="openAIEndpointCapabilities.includes(option.value)"
+                  @change="toggleOpenAIEndpointCapability(option.value, $event)"
+                />
+                <span class="text-gray-700 dark:text-gray-200">{{ option.label }}</span>
+              </label>
+              <NewFeatureBadge v-if="option.value === 'videos'" :notice-id="NEW_FEATURE_NOTICES.openaiVideos" :user-id="authStore.user?.id" />
+            </div>
           </div>
           <p class="input-hint">{{ t('admin.accounts.openai.endpointCapabilitiesDesc') }}</p>
         </div>
@@ -2556,7 +2638,7 @@
 
       <!-- OpenAI APIKey images: backfill b64_json from url -->
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'apikey'"
+        v-if="editingAccount?.platform === 'openai' && editingAccount?.type === 'apikey'"
         class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div>
@@ -2586,7 +2668,7 @@
       </div>
 
       <div
-        v-if="account?.type === 'apikey'"
+        v-if="editingAccount?.type === 'apikey'"
         class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div>
@@ -2604,13 +2686,13 @@
       </div>
 
       <OllamaCloudUsageSettings
-        v-if="account?.ollama_cloud_usage?.eligible"
-        :account="account"
+        v-if="editingAccount?.ollama_cloud_usage?.eligible"
+        :account="editingAccount"
         @updated="handleOllamaCloudUsageUpdated"
       />
 
       <section
-        v-if="account?.opencode_go_usage?.eligible"
+        v-if="editingAccount?.opencode_go_usage?.eligible"
         class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600"
         data-testid="opencode-go-usage-settings"
       >
@@ -2696,7 +2778,7 @@
 
       <!-- Anthropic API Key 自动透传开关 -->
       <div
-        v-if="account?.platform === 'anthropic' && account?.type === 'apikey'"
+        v-if="editingAccount?.platform === 'anthropic' && editingAccount?.type === 'apikey'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between">
@@ -2724,9 +2806,43 @@
         </div>
       </div>
 
+      <!-- Anthropic API Key 按请求 TTL 计费开关 -->
+      <div
+        v-if="editingAccount?.platform === 'anthropic' && editingAccount?.type === 'apikey'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="flex items-center gap-2">
+              <label class="input-label mb-0">{{ t('admin.accounts.anthropic.cacheTtlBillingFromRequest') }}</label>
+              <NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.cacheTtlBillingFromRequest" :user-id="authStore.user?.id" />
+            </div>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.anthropic.cacheTtlBillingFromRequestDesc') }}
+            </p>
+          </div>
+          <button
+            type="button"
+            data-testid="cache-ttl-billing-from-request-toggle"
+            @click="cacheTtlBillingFromRequestEnabled = !cacheTtlBillingFromRequestEnabled"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              cacheTtlBillingFromRequestEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                cacheTtlBillingFromRequestEnabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+      </div>
+
       <!-- Anthropic API Key 抹除 Claude Code 身份开关 -->
       <div
-        v-if="account?.platform === 'anthropic' && account?.type === 'apikey'"
+        v-if="editingAccount?.platform === 'anthropic' && editingAccount?.type === 'apikey'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between">
@@ -2756,7 +2872,7 @@
 
       <!-- Anthropic API Key 模拟 Claude Code 客户端开关（与抹除身份互斥） -->
       <div
-        v-if="account?.platform === 'anthropic' && account?.type === 'apikey'"
+        v-if="editingAccount?.platform === 'anthropic' && editingAccount?.type === 'apikey'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between">
@@ -2799,7 +2915,7 @@
       </div>
 
       <div
-        v-if="account?.platform === 'anthropic' && account?.type === 'apikey'"
+        v-if="editingAccount?.platform === 'anthropic' && editingAccount?.type === 'apikey'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -2818,7 +2934,7 @@
 
       <!-- Anthropic / OpenAI API Key: Web Search Emulation (hidden when global disabled) -->
       <div
-        v-if="(account?.platform === 'anthropic' || account?.platform === 'openai') && account?.type === 'apikey' && webSearchGlobalEnabled"
+        v-if="(editingAccount?.platform === 'anthropic' || editingAccount?.platform === 'openai') && editingAccount?.type === 'apikey' && webSearchGlobalEnabled"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between">
@@ -2838,7 +2954,7 @@
 
       <!-- 配额控制 (Anthropic apikey/bedrock: 配额限制 + 亲和) -->
       <div
-        v-if="account?.platform === 'anthropic' && (account?.type === 'apikey' || account?.type === 'bedrock')"
+        v-if="editingAccount?.platform === 'anthropic' && (editingAccount?.type === 'apikey' || editingAccount?.type === 'bedrock')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -2889,7 +3005,7 @@
       </div>
       <!-- 配额控制 (非 Anthropic apikey/bedrock，以及 Vertex service_account) -->
       <div
-        v-else-if="supportsAccountQuota(account?.type)"
+        v-else-if="supportsAccountQuota(editingAccount?.type)"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -2941,7 +3057,7 @@
 
       <!-- OpenAI API 长上下文计费开关 -->
       <div
-        v-if="account?.platform === 'openai' && !isSparkShadow && !hideAccountLongContextBilling && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
+        v-if="editingAccount?.platform === 'openai' && !isSparkShadow && !hideAccountLongContextBilling && (editingAccount?.type === 'oauth' || editingAccount?.type === 'setup-token' || editingAccount?.type === 'apikey')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -2973,7 +3089,7 @@
       </div>
 
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'apikey'"
+        v-if="editingAccount?.platform === 'openai' && editingAccount?.type === 'apikey'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -3005,7 +3121,7 @@
       </div>
 
       <div
-        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token')"
+        v-if="editingAccount?.platform === 'openai' && (editingAccount?.type === 'oauth' || editingAccount?.type === 'setup-token')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between">
@@ -3061,7 +3177,7 @@
 
       <!-- Codex 292 门票状态（仅 OpenAI OAuth） -->
       <div
-        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token') && codexTurnTickets.length"
+        v-if="editingAccount?.platform === 'openai' && (editingAccount?.type === 'oauth' || editingAccount?.type === 'setup-token') && codexTurnTickets.length"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <label class="input-label mb-0">{{ t('admin.accounts.openai.codexTurnTicket') }}</label>
@@ -3090,7 +3206,7 @@
 
       <!-- Codex 指纹收敛模式（仅 OpenAI OAuth） -->
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'oauth'"
+        v-if="editingAccount?.platform === 'openai' && editingAccount?.type === 'oauth'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -3108,7 +3224,7 @@
 
       <!-- OpenAI 订阅档位手动覆盖（Plus/Pro/Free），仅 OAuth 非影子账号 -->
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow"
+        v-if="editingAccount?.platform === 'openai' && editingAccount?.type === 'oauth' && !isSparkShadow"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -3125,7 +3241,7 @@
       </div>
 
       <div
-        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
+        v-if="editingAccount?.platform === 'openai' && (editingAccount?.type === 'oauth' || editingAccount?.type === 'setup-token' || editingAccount?.type === 'apikey')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="flex items-center justify-between">
@@ -3142,11 +3258,11 @@
         <div class="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:bg-dark-700 dark:text-gray-300">
           <span class="font-medium">{{ t(openAICompactStatusKey) }}</span>
           <span
-            v-if="account?.extra?.openai_compact_checked_at"
+            v-if="editingAccount?.extra?.openai_compact_checked_at"
             class="ml-2 text-gray-500 dark:text-gray-400"
           >
             {{ t('admin.accounts.openai.compactLastChecked') }}:
-            {{ formatDateTime(new Date(String(account.extra.openai_compact_checked_at))) }}
+            {{ formatDateTime(new Date(String(editingAccount.extra.openai_compact_checked_at))) }}
           </span>
         </div>
         <div>
@@ -3211,7 +3327,7 @@
       </div>
 
       <div
-        v-if="account?.platform === 'openai'"
+        v-if="editingAccount?.platform === 'openai'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="space-y-2">
@@ -3289,7 +3405,7 @@
       </div>
 
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow"
+        v-if="editingAccount?.platform === 'openai' && editingAccount?.type === 'oauth' && !isSparkShadow"
         class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600"
         data-testid="auto-reset-credit-settings"
       >
@@ -3350,7 +3466,7 @@
 
       <!-- 配额控制 (Anthropic OAuth/SetupToken: 亲和 + 窗口费用 + 会话 + RPM 等) -->
       <div
-        v-if="account?.platform === 'anthropic' && (account?.type === 'oauth' || account?.type === 'setup-token')"
+        v-if="editingAccount?.platform === 'anthropic' && (editingAccount?.type === 'oauth' || editingAccount?.type === 'setup-token')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -3652,7 +3768,7 @@
         </div>
 
         <!-- Mixed Scheduling (only for antigravity accounts, read-only in edit mode) -->
-        <div v-if="account?.platform === 'antigravity'" class="flex items-center gap-2">
+        <div v-if="editingAccount?.platform === 'antigravity'" class="flex items-center gap-2">
           <label class="flex cursor-not-allowed items-center gap-2 opacity-60">
             <input
               type="checkbox"
@@ -3681,7 +3797,7 @@
             </div>
           </div>
         </div>
-        <div v-if="account?.platform === 'antigravity'" class="mt-3 flex items-center gap-2">
+        <div v-if="editingAccount?.platform === 'antigravity'" class="mt-3 flex items-center gap-2">
           <label class="flex cursor-pointer items-center gap-2">
             <input
               type="checkbox"
@@ -3714,7 +3830,7 @@
       <GroupSelector
         v-model="form.group_ids"
         :groups="selectableGroups"
-        :platform="account?.platform"
+        :platform="editingAccount?.platform"
         :mixed-scheduling="mixedScheduling"
         data-tour="account-form-groups"
       />
@@ -3722,14 +3838,14 @@
       <AccountGroupModelLimits
         v-model="groupAllowedModels"
         :groups="groupsForModelLimits"
-        :platform="account?.platform"
-        :account-id="account?.id"
+        :platform="editingAccount?.platform"
+        :account-id="platformChanged ? undefined : editingAccount?.id"
       />
 
     </form>
 
     <template #footer>
-      <div v-if="account" class="flex justify-end gap-3">
+      <div v-if="editingAccount" class="flex justify-end gap-3">
         <button @click="handleClose" type="button" class="btn btn-secondary">
           {{ t('common.cancel') }}
         </button>
@@ -3780,6 +3896,8 @@
 </template>
 
 <script setup lang="ts">
+import { listPlatforms, platformDisplayName } from '@/constants/platformCatalog'
+import { platformAccountDraft } from './accountPlatformChange'
 import QwenPlatformNotice from '@/components/common/QwenPlatformNotice.vue'
 import QwenCacheSettings from './QwenCacheSettings.vue'
 import { applyQwenCacheSettings } from './qwenCacheSettings'
@@ -3791,7 +3909,7 @@ import OpenAIAuthConnections from './OpenAIAuthConnections.vue'
 import ExcelBPSCredentialStatus from './ExcelBPSCredentialStatus.vue'
 import { DEFAULT_ACCOUNT_COST_MULTIPLIER, isValidAccountCostMultiplier, readAccountCostMultiplier } from '@/utils/accountCost'
 
-import { ref, reactive, computed, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
+import { ref, shallowRef, reactive, computed, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ExcelBPSModeSwitches from './ExcelBPSModeSwitches.vue'
 import ExcelBPSSearchOptions from './ExcelBPSSearchOptions.vue'
@@ -3800,7 +3918,9 @@ import { useExcelBPSDefaults } from '@/composables/useExcelBPSDefaults'
 import { DEFAULT_BPS_RECOVERY_INTERVAL_MINUTES, MAX_BPS_RECOVERY_INTERVAL_MINUTES, isValidBPSRecoveryInterval, bpsRecoveryIntervalOrDefault } from '@/utils/excelBPSRecovery'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
+import GatewayAccountFields from './GatewayAccountFields.vue'
 import NewFeatureBadge from '@/components/common/NewFeatureBadge.vue'
+import ProbePenaltySettings from './ProbePenaltySettings.vue'
 import OpenAIProxySettings from '@/components/account/OpenAIProxySettings.vue'
 import { NEW_FEATURE_NOTICES } from '@/constants/newFeatureNotices'
 
@@ -3831,6 +3951,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
+import UpstreamGroupSyncButton from '@/components/account/UpstreamGroupSyncButton.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import AccountRpmSettings from '@/components/account/AccountRpmSettings.vue'
 import { applyAccountRPMSettings } from '@/components/account/accountRpm'
@@ -3839,6 +3960,7 @@ import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
+import GatewayModelSettings from '@/components/account/GatewayModelSettings.vue'
 import AccountGroupModelLimits from '@/components/account/AccountGroupModelLimits.vue'
 import AccountAutoBPSSection from '@/components/account/AccountAutoBPSSection.vue'
 import {
@@ -3936,6 +4058,30 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+// Keep the persisted prop intact while all platform-specific form sections use
+// the same draft. Cancel/reopen restores the source account.
+const editingAccount = shallowRef<Account | null>(props.account)
+const domesticRouteAutoSchedule = ref(false)
+const supportsDomesticRouteProbe = computed(() => {
+  const a = editingAccount.value
+  return a?.type === 'apikey' && (a.platform === 'qwen' || isCNProviderPlatform(a.platform))
+})
+const platformChanged = computed(() => editingAccount.value?.platform !== props.account?.platform)
+const platformOptions = computed(() => {
+  const source = props.account
+  if (!source) return []
+  const authMode = source.credentials?.auth_mode
+  const portableServiceAccount = authMode === undefined ||
+    (typeof authMode === 'string' && authMode.trim() === 'service_account')
+  const candidates = source.parent_account_id != null ? [] : listPlatforms().filter(spec =>
+    source.type === 'apikey' ? spec.id !== 'antigravity' :
+      source.type === 'service_account' && portableServiceAccount && ['anthropic', 'gemini'].includes(source.platform) && ['anthropic', 'gemini'].includes(spec.id)
+  )
+  if (!candidates.some(spec => spec.id === source.platform)) {
+    return [{ value: source.platform, label: platformDisplayName(source.platform) }]
+  }
+  return candidates.map(spec => ({ value: spec.id, label: spec.display_name }))
+})
 const emit = defineEmits<{
   close: []
   'retry-proxies': []
@@ -3946,14 +4092,15 @@ const { t } = useI18n()
 const siwcEnabled = ref(false)
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const gatewayKind = ref<'sub2api' | 'new_api'>('sub2api')
 const globalBpsEnabled = computed(() => appStore.cachedPublicSettings?.excel_bps_enabled !== false)
 const globalPrismEnabled = computed(() => appStore.cachedPublicSettings?.prism_browser_enabled === true)
 const browserTimeZone = getBrowserTimeZone()
 
 const selectableGroups = computed(() => {
   const groups = new Map<number, Group>(props.groups.map(group => [group.id, group]))
-  const assignedIds = new Set(props.account?.group_ids ?? [])
-  for (const group of props.account?.groups ?? []) {
+  const assignedIds = new Set(editingAccount.value?.group_ids ?? [])
+  for (const group of editingAccount.value?.groups ?? []) {
     if (assignedIds.has(group.id) && !groups.has(group.id)) {
       groups.set(group.id, group)
     }
@@ -3973,24 +4120,24 @@ const groupsForModelLimits = computed(() => {
 
 // Spark 影子账号(parent_account_id 非空):代理恒继承母账号,不可独立编辑(外审 B/P1),
 // 故隐藏代理选择器。
-const isSparkShadow = computed(() => props.account?.parent_account_id != null)
+const isSparkShadow = computed(() => editingAccount.value?.parent_account_id != null)
 
 // 「降智后自动开启 BPS」与后端 QualityBPSEligible 一致：只有普通 ChatGPT OAuth 母账号（不含 PAT、Agent Identity）。
 const autoBPS = useAccountAutoBPS()
 const openaiProxySupported = computed(() => {
-  const account = props.account
+  const account = editingAccount.value
   if (account?.platform !== 'openai' || account.type !== 'oauth' || isSparkShadow.value) return false
   const credentials = (account.credentials ?? {}) as Record<string, unknown>
   const modes = [credentials.auth_mode, credentials.openai_auth_mode].map(mode => String(mode ?? '').trim().toLowerCase())
   return !modes.some(mode => mode === 'agentidentity' || mode === 'personalaccesstoken' || mode === 'personal_access_token')
 })
 const autoBPSSupported = openaiProxySupported
-watch(() => [props.show, props.account?.id, autoBPSSupported.value] as const, ([show, id, supported]) => {
+watch(() => [props.show, editingAccount.value?.id, autoBPSSupported.value] as const, ([show, id, supported]) => {
   if (show && id && supported) void autoBPS.load(id)
   else autoBPS.reset()
 }, { immediate: true })
 
-const codexTurnTickets = computed(() => props.account?.codex_turn_tickets ?? [])
+const codexTurnTickets = computed(() => editingAccount.value?.codex_turn_tickets ?? [])
 
 function formatCodexTicketRemaining(seconds: number) {
   const total = Math.max(0, Math.floor(seconds || 0))
@@ -4004,11 +4151,12 @@ const hideAccountLongContextBilling = computed(() => {
 })
 
 const handleOllamaCloudUsageUpdated = (state: OllamaCloudUsageState) => {
-  if (props.account) emit('updated', { ...props.account, ollama_cloud_usage: state })
+  if (platformChanged.value) return
+  if (editingAccount.value) emit('updated', { ...editingAccount.value, ollama_cloud_usage: state })
 }
 
 // OpenCode Go usage panel state
-const opencodeGoState = ref<OpenCodeGoUsageState | null>(props.account?.opencode_go_usage ?? null)
+const opencodeGoState = ref<OpenCodeGoUsageState | null>(editingAccount.value?.opencode_go_usage ?? null)
 const opencodeGoLoading = ref(false)
 const opencodeGoSaving = ref(false)
 const opencodeGoRefreshing = ref(false)
@@ -4037,14 +4185,15 @@ const opencodeGoWindowSummary = (window?: OpenCodeGoUsageWindow) => {
 }
 
 const applyOpenCodeGoState = (next: OpenCodeGoUsageState) => {
+  if (platformChanged.value) return
   opencodeGoState.value = next
-  if (props.account) emit('updated', { ...props.account, opencode_go_usage: next })
+  if (editingAccount.value) emit('updated', { ...editingAccount.value, opencode_go_usage: next })
 }
 
 const loadOpenCodeGoUsage = async () => {
   opencodeGoLoading.value = true
   try {
-    applyOpenCodeGoState(await adminAPI.accounts.getOpenCodeGoUsage(props.account!.id))
+    applyOpenCodeGoState(await adminAPI.accounts.getOpenCodeGoUsage(editingAccount.value!.id))
   } catch (error) {
     appStore.showError(extractApiErrorMessage(error, t('admin.accounts.opencodeGo.loadFailed')))
   } finally {
@@ -4055,7 +4204,7 @@ const loadOpenCodeGoUsage = async () => {
 const setOpenCodeGoAutoRefresh = async (enabled: boolean) => {
   opencodeGoSaving.value = true
   try {
-    applyOpenCodeGoState(await adminAPI.accounts.setOpenCodeGoUsageAutoRefresh(props.account!.id, enabled))
+    applyOpenCodeGoState(await adminAPI.accounts.setOpenCodeGoUsageAutoRefresh(editingAccount.value!.id, enabled))
   } catch (error) {
     appStore.showError(extractApiErrorMessage(error, t('admin.accounts.opencodeGo.autoRefreshFailed')))
   } finally {
@@ -4066,7 +4215,7 @@ const setOpenCodeGoAutoRefresh = async (enabled: boolean) => {
 const refreshOpenCodeGoUsage = async () => {
   opencodeGoRefreshing.value = true
   try {
-    applyOpenCodeGoState(await adminAPI.accounts.refreshOpenCodeGoUsage(props.account!.id))
+    applyOpenCodeGoState(await adminAPI.accounts.refreshOpenCodeGoUsage(editingAccount.value!.id))
     appStore.showSuccess(t('admin.accounts.opencodeGo.refreshSuccess'))
   } catch (error) {
     appStore.showError(extractI18nErrorMessage(
@@ -4080,8 +4229,8 @@ const refreshOpenCodeGoUsage = async () => {
   }
 }
 
-watch(() => props.account?.id, () => {
-  opencodeGoState.value = props.account?.opencode_go_usage ?? null
+watch(() => editingAccount.value?.id, () => {
+  opencodeGoState.value = editingAccount.value?.opencode_go_usage ?? null
   if (opencodeGoState.value && !opencodeGoState.value.snapshot) void loadOpenCodeGoUsage()
 })
 
@@ -4091,10 +4240,10 @@ onMounted(() => {
 
 // Platform-specific hint for Base URL
 const baseUrlHint = computed(() => {
-  if (!props.account) return t('admin.accounts.baseUrlHint')
-  if (props.account.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
-  if (props.account.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
-  if (props.account.platform === 'grok') return ''
+  if (!editingAccount.value) return t('admin.accounts.baseUrlHint')
+  if (editingAccount.value.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
+  if (editingAccount.value.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
+  if (editingAccount.value.platform === 'grok') return ''
   return t('admin.accounts.baseUrlHint')
 })
 
@@ -4135,27 +4284,27 @@ const prismBrowserModels = ref<string[]>([...prismSupportedModels])
 // 二者均可修正（早期创建的账号可能存错默认值），切换时重置 base_url 预置。
 // 覆盖全部多协议 API Key 供应商（国产厂商、OpenCode 与走通用表单的供应商）。
 const isCNApiKeyAccount = computed(
-  () => props.account?.type === 'apikey' && isMultiProtocolApiKeyPlatform(props.account.platform)
+  () => editingAccount.value?.type === 'apikey' && isMultiProtocolApiKeyPlatform(editingAccount.value.platform)
 )
 // 前端没有专属界面、走通用表单的多协议供应商：模式 / 协议 / 默认端点来自 profile。
 const isGenericMultiProtocolAccount = computed(
   () =>
     isCNApiKeyAccount.value &&
-    !isCNProviderPlatform(props.account?.platform ?? '') &&
-    props.account?.platform !== 'opencode_go'
+    !isCNProviderPlatform(editingAccount.value?.platform ?? '') &&
+    editingAccount.value?.platform !== 'opencode_go'
 )
-const genericAccountModes = computed(() => providerAccountModes(props.account?.platform ?? ''))
+const genericAccountModes = computed(() => providerAccountModes(editingAccount.value?.platform ?? ''))
 // CnBaseUrlPresets 的 platform prop 是平台字面量联合类型，模板里不能写
 // `as` 断言（其中的 `|` 会被 eslint 误判为 Vue2 filter 语法），经此 computed 传递。
 const cnPresetPlatform = computed<CnProviderPlatform>(() => {
-  const platform = props.account?.platform
+  const platform = editingAccount.value?.platform
   if (isCNProviderPlatform(platform ?? '')) {
     return platform as CnProviderPlatform
   }
   return 'kimi'
 })
 const adaptivePresetPlatform = computed<string>(() => {
-  if (isCNApiKeyAccount.value) return props.account!.platform
+  if (isCNApiKeyAccount.value) return editingAccount.value!.platform
   return cnPresetPlatform.value
 })
 const editApiProtocol = ref<CnApiProtocol>('adaptive')
@@ -4166,7 +4315,7 @@ const editOpenCodeAccountMode = ref<OpenCodeAccountMode>('go')
 // 国产厂商的接入模式只有 payg / coding。
 const cnPresetMode = computed<CnAccountMode>(() => (editAccountMode.value === 'coding' ? 'coding' : 'payg'))
 function currentOpenCodeOrCNMode(): string {
-  return props.account?.platform === 'opencode_go' ? editOpenCodeAccountMode.value : editAccountMode.value
+  return editingAccount.value?.platform === 'opencode_go' ? editOpenCodeAccountMode.value : editAccountMode.value
 }
 // 智谱团队版 Coding Plan：组织/项目 ID，写入 credentials 供额度探测切换团队端点
 const editZhipuOrganization = ref('')
@@ -4184,7 +4333,7 @@ const syncingForm = ref(false)
 const cnAccountModeOptions = computed<Array<{ value: CnAccountMode; labelKey: 'payg' | 'coding' }>>(
   () => {
     // DeepSeek 无 coding 套餐（与创建弹窗一致），仅保留按量付费。
-    if (props.account?.platform === 'deepseek') {
+    if (editingAccount.value?.platform === 'deepseek') {
       return [{ value: 'payg', labelKey: 'payg' }]
     }
     return [
@@ -4200,7 +4349,7 @@ const NATIVE_PROTOCOL_LABEL_KEYS: Record<CnNativeApiProtocol, string> = {
 }
 // 当前供应商与接入模式提供原生端点的协议（profile 中有默认基址的协议）。
 const editAdaptiveProtocolOptions = computed<Array<{ value: CnNativeApiProtocol; labelKey: string }>>(() =>
-  providerNativeProtocols(props.account?.platform ?? '', currentOpenCodeOrCNMode()).map(value => ({
+  providerNativeProtocols(editingAccount.value?.platform ?? '', currentOpenCodeOrCNMode()).map(value => ({
     value,
     labelKey: NATIVE_PROTOCOL_LABEL_KEYS[value]
   }))
@@ -4224,25 +4373,25 @@ watch(editApiProtocol, (protocol, previousProtocol) => {
   }
   if (previousProtocol === 'adaptive') {
     editBaseUrl.value = editAdaptiveBaseUrls.value[protocol] ||
-      defaultCNBaseUrl(props.account!.platform, currentOpenCodeOrCNMode(), protocol)
+      defaultCNBaseUrl(editingAccount.value!.platform, currentOpenCodeOrCNMode(), protocol)
     return
   }
-  editBaseUrl.value = defaultCNBaseUrl(props.account!.platform, currentOpenCodeOrCNMode(), protocol)
+  editBaseUrl.value = defaultCNBaseUrl(editingAccount.value!.platform, currentOpenCodeOrCNMode(), protocol)
 })
 watch(editAccountMode, (mode, previousMode) => {
   if (!isCNApiKeyAccount.value || syncingForm.value) return
-  if (props.account?.platform === 'opencode_go') return
+  if (editingAccount.value?.platform === 'opencode_go') return
   // 供应商没有的接入模式（如 deepseek 无 coding 套餐）防御性回退默认模式（UI 已隐藏该选项）。
-  const effectiveMode = resolveProviderAccountMode(props.account!.platform, mode)
+  const effectiveMode = resolveProviderAccountMode(editingAccount.value!.platform, mode)
   if (effectiveMode !== mode) {
     editAccountMode.value = effectiveMode
     return
   }
-  if (providerRoutesByModel(props.account!.platform)) {
-    const previousRules = JSON.stringify(defaultProviderProtocolRules(props.account!.platform, previousMode))
+  if (providerRoutesByModel(editingAccount.value!.platform)) {
+    const previousRules = JSON.stringify(defaultProviderProtocolRules(editingAccount.value!.platform, previousMode))
     if (JSON.stringify(editOpenCodeGoProtocolRules.value) === previousRules) {
       editOpenCodeGoProtocolRules.value = cloneOpenCodeGoProtocolRules(
-        defaultProviderProtocolRules(props.account!.platform, mode)
+        defaultProviderProtocolRules(editingAccount.value!.platform, mode)
       )
     }
   }
@@ -4257,10 +4406,10 @@ watch(editAccountMode, (mode, previousMode) => {
     editBaseUrl.value = editAdaptiveBaseUrls.value.chat_completions
     return
   }
-  editBaseUrl.value = defaultCNBaseUrl(props.account!.platform, mode, editApiProtocol.value)
+  editBaseUrl.value = defaultCNBaseUrl(editingAccount.value!.platform, mode, editApiProtocol.value)
 })
 watch(editOpenCodeAccountMode, (mode, previousMode) => {
-  if (!isCNApiKeyAccount.value || props.account?.platform !== 'opencode_go' || syncingForm.value) return
+  if (!isCNApiKeyAccount.value || editingAccount.value?.platform !== 'opencode_go' || syncingForm.value) return
   if (editApiProtocol.value === 'adaptive') {
     const previousDefaults = defaultCNAdaptiveBaseUrls('opencode_go', previousMode)
     const nextDefaults = defaultCNAdaptiveBaseUrls('opencode_go', mode)
@@ -4299,13 +4448,13 @@ const editVertexClientEmail = ref('')
 const editVertexLocation = ref('us-central1')
 const editVertexApiKey = ref('')
 const isVertexAPIKeyMode = computed(() =>
-  props.account?.platform === 'gemini' &&
-  props.account?.type === 'service_account' &&
-  (props.account?.credentials as Record<string, unknown>)?.auth_mode === 'apikey'
+  editingAccount.value?.platform === 'gemini' &&
+  editingAccount.value?.type === 'service_account' &&
+  (editingAccount.value?.credentials as Record<string, unknown>)?.auth_mode === 'apikey'
 )
 const isBedrockAPIKeyMode = computed(() =>
-  props.account?.type === 'bedrock' &&
-  (props.account?.credentials as Record<string, unknown>)?.auth_mode === 'apikey'
+  editingAccount.value?.type === 'bedrock' &&
+  (editingAccount.value?.credentials as Record<string, unknown>)?.auth_mode === 'apikey'
 )
 const modelMappings = ref<ModelMapping[]>([])
 const openaiModelAliases = ref(false)
@@ -4367,8 +4516,10 @@ const setQwenBaseUrl = (value: string) => {
 }
 const headerOverrideRows = ref<HeaderOverrideRow[]>([])
 
+// 身份上报变量仅 api_key 账号可用：OAuth 订阅上游不能收到网关用户身份
+const headerOverrideAllowVariables = computed(() => props.account?.type === 'apikey')
 const headerOverrideCapable = computed(
-  () => !!props.account && isHeaderOverrideCapable(props.account.platform, props.account.type)
+  () => !!editingAccount.value && isHeaderOverrideCapable(editingAccount.value.platform, editingAccount.value.type)
 )
 
 // Grok OAuth 自定义上游地址（仅转发端点；OAuth 授权/令牌刷新不受影响）
@@ -4404,19 +4555,19 @@ function sameGrokMapping(left: Record<string, string>, right: Record<string, str
 }
 
 const grokDiagnosticsDirty = computed(() => {
-  if (props.account?.platform !== 'grok') return false
-  const credentials = (props.account.credentials as Record<string, unknown> | undefined) || {}
+  if (editingAccount.value?.platform !== 'grok') return false
+  const credentials = (editingAccount.value.credentials as Record<string, unknown> | undefined) || {}
   if (!sameGrokMapping(normalizedGrokMapping(credentials.model_mapping), normalizedGrokMapping(buildModelRestrictionMapping()))) {
     return true
   }
 
   const savedBase = typeof credentials.base_url === 'string' ? credentials.base_url.trim() : ''
-  if (props.account.type === 'oauth') {
+  if (editingAccount.value.type === 'oauth') {
     const savedCustom = isCustomGrokBaseUrl(savedBase)
     if (grokOAuthCustomBaseUrlEnabled.value !== savedCustom) return true
     return grokOAuthCustomBaseUrlEnabled.value && grokOAuthBaseUrl.value.trim() !== savedBase
   }
-  if (props.account.type === 'apikey') {
+  if (editingAccount.value.type === 'apikey') {
     const savedEffective = savedBase || GROK_API_KEY_DEFAULT_BASE_URL
     const current = editBaseUrl.value.trim() || GROK_API_KEY_DEFAULT_BASE_URL
     return current !== savedEffective
@@ -4434,14 +4585,14 @@ const resetGrokDiagnostics = () => {
 }
 
 const refreshGrokDiagnostics = async () => {
-  const id = props.account?.id
-  if (!props.show || props.account?.platform !== 'grok' || !id) return
+  const id = editingAccount.value?.id
+  if (platformChanged.value || !props.show || editingAccount.value?.platform !== 'grok' || !id) return
   const generation = ++diagnosticsGeneration
   diagnosticsLoading.value = true
   diagnosticsRefreshFailed.value = false
   try {
     const fresh = await adminAPI.accounts.getById(id)
-    if (generation !== diagnosticsGeneration || !props.show || props.account?.id !== id) return
+    if (generation !== diagnosticsGeneration || !props.show || editingAccount.value?.id !== id) return
     grokDiagnostics.value = fresh.grok_model_diagnostics ?? null
   } catch {
     if (generation === diagnosticsGeneration) diagnosticsRefreshFailed.value = true
@@ -4451,13 +4602,13 @@ const refreshGrokDiagnostics = async () => {
 }
 
 const syncGrokDiagnostics = async () => {
-  const id = props.account?.id
-  if (!props.show || props.account?.platform !== 'grok' || !id || grokDiagnosticsSyncing.value) return
+  const id = editingAccount.value?.id
+  if (platformChanged.value || !props.show || editingAccount.value?.platform !== 'grok' || !id || grokDiagnosticsSyncing.value) return
   const syncVersion = grokDiagnosticsSyncVersion
   grokDiagnosticsSyncing.value = true
   try {
     const result = await adminAPI.accounts.syncUpstreamModels(id)
-    if (syncVersion !== grokDiagnosticsSyncVersion || !props.show || props.account?.id !== id) return
+    if (syncVersion !== grokDiagnosticsSyncVersion || !props.show || editingAccount.value?.id !== id) return
     const warnings = result.warnings ?? []
     if (result.discovery_source === 'configured_fallback') {
       appStore.showWarning(t('admin.accounts.grokModelDiagnostics.configuredFallback'))
@@ -4470,11 +4621,11 @@ const syncGrokDiagnostics = async () => {
       appStore.showWarning(t('admin.accounts.syncUpstreamModelsMetadataPartial'))
     }
   } catch (error) {
-    if (syncVersion !== grokDiagnosticsSyncVersion || !props.show || props.account?.id !== id) return
+    if (syncVersion !== grokDiagnosticsSyncVersion || !props.show || editingAccount.value?.id !== id) return
     const message = extractApiErrorMessage(error, t('admin.accounts.syncUpstreamModelsFailed'))
     appStore.showError(t('admin.accounts.syncUpstreamModelsError', { message }))
   } finally {
-    if (syncVersion === grokDiagnosticsSyncVersion && props.show && props.account?.id === id) {
+    if (syncVersion === grokDiagnosticsSyncVersion && props.show && editingAccount.value?.id === id) {
       grokDiagnosticsSyncing.value = false
       await refreshGrokDiagnostics()
     }
@@ -4483,12 +4634,12 @@ const syncGrokDiagnostics = async () => {
 
 const grokApiKeyWhitelistRef = ref<InstanceType<typeof ModelWhitelistSelector> | null>(null)
 const grokOAuthWhitelistRef = ref<InstanceType<typeof ModelWhitelistSelector> | null>(null)
-const activeGrokWhitelist = computed(() => props.account?.type === 'oauth'
+const activeGrokWhitelist = computed(() => editingAccount.value?.type === 'oauth'
   ? grokOAuthWhitelistRef.value : grokApiKeyWhitelistRef.value)
 const isGrokCatalogSyncing = computed(() => grokDiagnosticsSyncing.value
   || Boolean(activeGrokWhitelist.value?.isSyncingUpstream))
 const requestGrokCatalogSync = async () => {
-  if (!props.show || props.account?.platform !== 'grok' || !props.account.id
+  if (platformChanged.value || !props.show || editingAccount.value?.platform !== 'grok' || !editingAccount.value.id
       || diagnosticsLoading.value || isGrokCatalogSyncing.value) return
   const mode = modelRestrictionMode.value
   const selector = activeGrokWhitelist.value
@@ -4501,11 +4652,11 @@ const requestGrokCatalogSync = async () => {
 }
 
 watch(
-  [() => props.show, () => props.account?.id, () => props.account?.platform],
+  [() => props.show, () => editingAccount.value?.id, () => editingAccount.value?.platform],
   ([show, id, platform], previous) => {
     const wasShow = previous?.[0]
     const previousId = previous?.[1]
-    if (!show || platform !== 'grok' || !id) {
+    if (platformChanged.value || !show || platform !== 'grok' || !id) {
       resetGrokDiagnostics()
       return
     }
@@ -4525,7 +4676,7 @@ onBeforeUnmount(() => {
 // explicit false in the account extra as the opt-out signal.
 const grokClientToolCacheEnabled = ref(true)
 const isGrokOAuthAccount = computed(
-  () => props.account?.platform === 'grok' && props.account?.type === 'oauth'
+  () => editingAccount.value?.platform === 'grok' && editingAccount.value?.type === 'oauth'
 )
 const grokMediaEligibilityMode = ref<GrokMediaEligibilityMode>('auto')
 const grokMediaEligibilityInitialMode = ref<GrokMediaEligibilityMode>('auto')
@@ -4574,9 +4725,14 @@ const autoPause7dDisabled = ref(false)
 const autoResetCreditEnabled = ref(false)
 const autoResetCredit5hThreshold = ref(100)
 const autoResetCredit7dThreshold = ref(100)
+const upstreamGroupSyncEnabled = ref(false)
+function setUpstreamGroupSync(enabled: boolean) {
+  upstreamGroupSyncEnabled.value = enabled
+  if (enabled) upstreamBillingAutoProbeEnabled.value = true
+}
 const upstreamBillingAutoProbeEnabled = ref(false)
 const upstreamBillingRateSyncEnabled = ref(false)
-const isNewAPIUpstream = computed(() => props.account?.extra?.upstream_billing_provider === 'new_api')
+const isNewAPIUpstream = computed(() => editingAccount.value?.extra?.upstream_billing_provider === 'new_api')
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
 // 上游ID：直接上游声明请求标识的响应头名，留空不记录。
 const upstreamRequestIdHeader = ref('')
@@ -4596,7 +4752,7 @@ const accountSchedulingThresholdOverrideEnabled = ref(false)
 const accountSchedulingThresholdOverrideValue = ref(100)
 const ACCOUNT_SCHEDULING_THRESHOLD_CREDENTIAL_KEY = 'account_scheduling_threshold'
 const supportsAccountSchedulingThresholdOverride = computed(() =>
-  supportsAccountSchedulingThresholdOverridePlatform(props.account?.platform)
+  supportsAccountSchedulingThresholdOverridePlatform(editingAccount.value?.platform)
 )
 const tempUnschedRules = ref<TempUnschedRuleForm[]>([])
 const getModelMappingKey = createStableObjectKeyResolver<ModelMapping>('edit-model-mapping')
@@ -4651,7 +4807,7 @@ const excelBPSCacheCreationAsInput = ref(false)
 const excelBPSAutoDisableOn403 = ref(false)
 const excelBPSAutoRecoverOn403 = ref(false)
 const excelBPSRecoveryIntervalMinutes = ref<number | string>(DEFAULT_BPS_RECOVERY_INTERVAL_MINUTES)
-const excelBPS403RecoveryPending = computed(() => props.account?.extra?.openai_excel_bps !== true && typeof props.account?.extra?.openai_excel_bps_403_disabled_at === 'string')
+const excelBPS403RecoveryPending = computed(() => editingAccount.value?.extra?.openai_excel_bps !== true && typeof editingAccount.value?.extra?.openai_excel_bps_403_disabled_at === 'string')
 const excelBPSOmitUnsupportedTools = ref(false)
 const excelBPSIgnoreEncryptedContent = ref(false)
 const excelBPSWebSearch = ref(false)
@@ -4662,7 +4818,7 @@ const bpsDefaults = useExcelBPSDefaults({
   enabled: excelBPSEnabled,
   mode: excelBPSMode,
   available: () => !authStore.isObserver,
-  context: () => JSON.stringify([props.show, props.account?.id, authStore.user?.id, authStore.isObserver]),
+  context: () => JSON.stringify([props.show, editingAccount.value?.id, authStore.user?.id, authStore.isObserver]),
   fields: {
     all_models: excelBPSAllModels, models: excelBPSModels,
     omit_unsupported_tools: excelBPSOmitUnsupportedTools,
@@ -4688,6 +4844,7 @@ const openAIRequestTimezone = ref('Asia/Singapore')
 const extraImageModels = ref('')
 const extraImageModelPrefixes = ref('')
 const openaiPassthroughEnabled = ref(false)
+const openaiPassthroughModelFilterEnabled = ref(false)
 // OpenAI Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
 const openaiFlattenNamespacesEnabled = ref(false)
 const openAILongContextBillingEnabled = ref(false)
@@ -4712,6 +4869,7 @@ const codexImageToolMode = ref<CodexImageToolMode>('inherit')
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
 const anthropicStripClaudeCodeIdentityEnabled = ref(false)
+const cacheTtlBillingFromRequestEnabled = ref(false)
 const anthropicMimicClaudeCodeEnabled = ref(false)
 const anthropicMimicClaudeCodeDeductTokens = ref(false)
 // 「模拟 Claude Code」与「抹除 Claude Code 身份」互斥：打开一个就关掉另一个
@@ -4769,13 +4927,13 @@ const openAIWSModeOptions = computed(() => [
 ])
 const openaiResponsesWebSocketV2Mode = computed({
   get: () => {
-    if (props.account?.type === 'apikey') {
+    if (editingAccount.value?.type === 'apikey') {
       return openaiAPIKeyResponsesWebSocketV2Mode.value
     }
     return openaiOAuthResponsesWebSocketV2Mode.value
   },
   set: (mode: OpenAIWSMode) => {
-    if (props.account?.type === 'apikey') {
+    if (editingAccount.value?.type === 'apikey') {
       openaiAPIKeyResponsesWebSocketV2Mode.value = mode
       return
     }
@@ -4866,7 +5024,7 @@ const openAITextEndpointCapabilityLabel = computed(() => {
   if (openAIResponsesMode.value === 'force_chat_completions') {
     return t('admin.accounts.openai.capabilityChatCompletions')
   }
-  const extra = props.account?.extra as Record<string, unknown> | undefined
+  const extra = editingAccount.value?.extra as Record<string, unknown> | undefined
   if (extra?.openai_responses_supported === true) {
     return t('admin.accounts.openai.capabilityResponsesAuto')
   }
@@ -4878,14 +5036,15 @@ const openAITextEndpointCapabilityLabel = computed(() => {
 const openAIEndpointCapabilityOptions = computed<{ value: OpenAIEndpointCapability; label: string }[]>(() => [
   { value: 'chat_completions', label: openAITextEndpointCapabilityLabel.value },
   { value: 'embeddings', label: t('admin.accounts.openai.capabilityEmbeddings') },
-  { value: 'seedance', label: 'Seedance (Ark)' }
+  { value: 'seedance', label: 'Seedance (Ark)' },
+  { value: 'videos', label: 'OpenAI Videos' }
 ])
 const openAITextGenerationCapabilityEnabled = computed(() =>
   openAIEndpointCapabilities.value.includes('chat_completions')
 )
 
 const normalizeOpenAIEndpointCapabilities = (values: OpenAIEndpointCapability[]) => {
-  const allowed: OpenAIEndpointCapability[] = ['chat_completions', 'embeddings', 'seedance']
+  const allowed: OpenAIEndpointCapability[] = ['chat_completions', 'embeddings', 'seedance', 'videos']
   const selected = allowed.filter((value) => values.includes(value))
   return selected.length > 0 ? selected : ['chat_completions', 'embeddings'] as OpenAIEndpointCapability[]
 }
@@ -4895,7 +5054,7 @@ const readOpenAIEndpointCapabilities = (credentials?: Record<string, unknown>): 
   if (Array.isArray(raw)) {
     return normalizeOpenAIEndpointCapabilities(
       raw.filter((value): value is OpenAIEndpointCapability =>
-        value === 'chat_completions' || value === 'embeddings' || value === 'seedance'
+        value === 'chat_completions' || value === 'embeddings' || value === 'seedance' || value === 'videos'
       )
     )
   }
@@ -4933,7 +5092,7 @@ const toggleOpenAIEndpointCapability = (capability: OpenAIEndpointCapability, ev
 
 const applyOpenAIEndpointCapabilities = (credentials: Record<string, unknown>) => {
   const capabilities = normalizeOpenAIEndpointCapabilities(openAIEndpointCapabilities.value)
-  if (capabilities.length === 2 && !capabilities.includes('seedance')) {
+  if (capabilities.length === 2 && capabilities.includes('chat_completions') && capabilities.includes('embeddings')) {
     delete credentials.openai_capabilities
     return
   }
@@ -4946,7 +5105,7 @@ const normalizeOpenAIResponsesMode = (mode: unknown): OpenAIResponsesMode => {
   return 'auto'
 }
 const isOpenAIModelRestrictionDisabled = computed(() =>
-  props.account?.platform === 'openai' && (openaiPassthroughEnabled.value || copilotSDKEnabled.value)
+  editingAccount.value?.platform === 'openai' && ((openaiPassthroughEnabled.value && !openaiPassthroughModelFilterEnabled.value) || copilotSDKEnabled.value)
 )
 const openAIResponsesStatusKey = computed(() => {
   if (openAIResponsesMode.value === 'force_responses') {
@@ -4955,7 +5114,7 @@ const openAIResponsesStatusKey = computed(() => {
   if (openAIResponsesMode.value === 'force_chat_completions') {
     return 'admin.accounts.openai.responsesStatusForcedChatCompletions'
   }
-  const extra = props.account?.extra as Record<string, unknown> | undefined
+  const extra = editingAccount.value?.extra as Record<string, unknown> | undefined
   if (extra?.openai_responses_supported === true) {
     return 'admin.accounts.openai.responsesStatusAutoSupported'
   }
@@ -4965,8 +5124,8 @@ const openAIResponsesStatusKey = computed(() => {
   return 'admin.accounts.openai.responsesStatusAutoUnknown'
 })
 const openAICompactStatusKey = computed(() => {
-  const extra = props.account?.extra as Record<string, unknown> | undefined
-  if (!props.account || props.account.platform !== 'openai') return ''
+  const extra = editingAccount.value?.extra as Record<string, unknown> | undefined
+  if (!editingAccount.value || editingAccount.value.platform !== 'openai') return ''
   const mode = typeof extra?.openai_compact_mode === 'string' ? extra.openai_compact_mode : 'auto'
   if (mode === 'force_on') return 'admin.accounts.openai.compactSupported'
   if (mode === 'force_off') return 'admin.accounts.openai.compactUnsupported'
@@ -4979,7 +5138,7 @@ const openAICompactStatusKey = computed(() => {
 })
 
 // Computed: current preset mappings based on platform
-const presetMappings = computed(() => getPresetMappingsByPlatform(props.account?.platform || 'anthropic'))
+const presetMappings = computed(() => getPresetMappingsByPlatform(editingAccount.value?.platform || 'anthropic'))
 const tempUnschedScopeOptions = computed<Array<{ value: TempUnschedulableScope; label: string; description: string }>>(() => [
   {
     value: 'model',
@@ -5049,14 +5208,14 @@ const tempUnschedPresets = computed(() => [
 
 // Computed: default base URL based on platform
 const defaultBaseUrl = computed(() => {
-  if (props.account?.platform === 'openai') return 'https://api.openai.com'
-  if (props.account?.platform === 'gemini') return 'https://generativelanguage.googleapis.com'
-  if (props.account?.platform === 'grok') return 'https://api.x.ai/v1'
-  if (props.account?.platform === 'typesafe') return 'https://api.typesafe.ai'
+  if (editingAccount.value?.platform === 'openai') return 'https://api.openai.com'
+  if (editingAccount.value?.platform === 'gemini') return 'https://generativelanguage.googleapis.com'
+  if (editingAccount.value?.platform === 'grok') return 'https://api.x.ai/v1'
+  if (editingAccount.value?.platform === 'typesafe') return 'https://api.typesafe.ai'
   // CN 供应商：按当前模式/协议回落到官方预设（清空输入框提交时使用），
   // 不能落到 anthropic 默认值（会被当 CC base 拼出错误端点）。
-  if (props.account && isMultiProtocolApiKeyPlatform(props.account.platform)) {
-    return defaultCNBaseUrl(props.account.platform, currentOpenCodeOrCNMode(), editApiProtocol.value)
+  if (editingAccount.value && isMultiProtocolApiKeyPlatform(editingAccount.value.platform)) {
+    return defaultCNBaseUrl(editingAccount.value.platform, currentOpenCodeOrCNMode(), editApiProtocol.value)
   }
   return 'https://api.anthropic.com'
 })
@@ -5068,6 +5227,14 @@ const mixedChannelWarningMessageText = computed(() => {
   return mixedChannelWarningRawMessage.value
 })
 
+const probePenaltyEnabled = ref(false)
+const probePenaltyMinimum = ref(0.001)
+const purchaseTiers = ['1K', '2K', '4K'] as const
+function readImagePrices(extra: Record<string, unknown> | undefined | null) {
+  const prices = extra?.image_purchase_prices as Record<string, number> | undefined
+  return Object.fromEntries(purchaseTiers.map(tier => [tier, prices?.[tier] ?? '']))
+}
+const imagePurchasePrices = ref(readImagePrices(undefined))
 const costMultiplier = ref(DEFAULT_ACCOUNT_COST_MULTIPLIER)
 const costMultiplierAutoSync = ref(true)
 
@@ -5092,10 +5259,30 @@ const handleUpstreamBillingRateSyncChange = (enabled: boolean) => {
   }
 }
 
+const billingBaseUrl = computed(() => (
+  isCNApiKeyAccount.value && editApiProtocol.value === 'adaptive'
+    ? editAdaptiveBaseUrls.value.chat_completions
+    : editBaseUrl.value
+).trim())
+const savedBillingBaseUrl = ref('')
+const upstreamGroupSource = computed(() => {
+  const account = editingAccount.value
+  if (!account) return null
+  const apiKey = editApiKey.value.trim()
+  if (apiKey && billingBaseUrl.value) {
+    return { platform: account.platform, base_url: billingBaseUrl.value, api_key: apiKey, proxy_id: form.proxy_id }
+  }
+  if (!platformChanged.value && billingBaseUrl.value === savedBillingBaseUrl.value && form.proxy_id === account.proxy_id && !apiKey) {
+    return { account_id: account.id }
+  }
+  return null
+})
+
 const handleUpstreamBillingAutoProbeChange = (enabled: boolean) => {
   upstreamBillingAutoProbeEnabled.value = enabled
   if (!enabled) {
     upstreamBillingRateSyncEnabled.value = false
+    upstreamGroupSyncEnabled.value = false
   }
 }
 
@@ -5145,11 +5332,17 @@ const loadModelRestrictionFromMapping = (rawMapping?: Record<string, unknown>) =
 const buildModelRestrictionMapping = () =>
   buildModelMappingObject('combined', allowedModels.value, modelMappings.value)
 
+const gatewaySyncCredentials = computed(() => editingAccount.value?.type === 'gateway' ? {
+  platform: 'gateway', type: 'gateway', upstream_kind: gatewayKind.value,
+  account_id: editingAccount.value.id, base_url: editBaseUrl.value.trim(), api_key: editApiKey.value.trim(),
+  proxy_id: authStore.isObserver ? undefined : form.proxy_id ?? undefined
+} : undefined)
+
 const applyOpenAIModelMappingCredentials = (credentials: Record<string, unknown>) => {
-  if (props.account?.type === 'oauth' && !isSparkShadow.value) {
+  if (editingAccount.value?.type === 'oauth' && !isSparkShadow.value) {
     credentials.model_mapping_mode = openaiModelAliases.value ? 'aliases' : 'whitelist'
   }
-  const shouldApplyModelMapping = !(openaiPassthroughEnabled.value || copilotSDKEnabled.value)
+  const shouldApplyModelMapping = !isOpenAIModelRestrictionDisabled.value
 
   if (shouldApplyModelMapping) {
     const modelMapping = buildModelRestrictionMapping()
@@ -5192,8 +5385,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   form.concurrency = newAccount.concurrency
   form.load_factor = newAccount.load_factor ?? null
   form.priority = newAccount.priority
+  const penalty = newAccount.extra?.probe_penalty as { enabled?: boolean; minimum_charge?: number } | undefined
+  probePenaltyEnabled.value = penalty?.enabled === true
+  probePenaltyMinimum.value = penalty?.minimum_charge ?? 0.001
+  imagePurchasePrices.value = readImagePrices(newAccount.extra)
   costMultiplier.value = readAccountCostMultiplier(newAccount.extra)
-  costMultiplierAutoSync.value = newAccount.extra?.upstream_billing_provider !== 'new_api' && newAccount.extra?.cost_multiplier_auto_sync !== false
+  costMultiplierAutoSync.value = newAccount.extra?.cost_multiplier_auto_sync !== false
   form.rate_multiplier = newAccount.rate_multiplier ?? 1
   form.group_rate_multiplier = newAccount.group_rate_multiplier ?? 1
   form.status = (newAccount.status === 'active' || newAccount.status === 'inactive' || newAccount.status === 'error')
@@ -5222,6 +5419,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedScheduling.value = false
   allowOverages.value = false
 	const extra = newAccount.extra as Record<string, unknown> | undefined
+	domesticRouteAutoSchedule.value = extra?.domestic_route_auto_schedule === true
 	mixedScheduling.value = extra?.mixed_scheduling === true
 	allowOverages.value = extra?.allow_overages === true
 	upstreamRequestIdHeader.value = readUpstreamRequestIdHeader(extra)
@@ -5236,6 +5434,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 	autoResetCredit7dThreshold.value =
 		typeof extra?.auto_reset_credit_7d_threshold === 'number' ? extra.auto_reset_credit_7d_threshold * 100 : 100
 	upstreamBillingAutoProbeEnabled.value = extra?.upstream_billing_probe_enabled === true
+  upstreamGroupSyncEnabled.value =
+    upstreamBillingAutoProbeEnabled.value && extra?.upstream_billing_group_sync_enabled === true
   upstreamBillingRateSyncEnabled.value =
     extra?.upstream_billing_provider !== 'new_api' && upstreamBillingAutoProbeEnabled.value && extra?.upstream_billing_rate_sync_enabled === true
 
@@ -5266,6 +5466,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   extraImageModels.value = ''
   extraImageModelPrefixes.value = ''
   openaiPassthroughEnabled.value = false
+  openaiPassthroughModelFilterEnabled.value = false
   openaiFlattenNamespacesEnabled.value = false
   openAILongContextBillingEnabled.value = false
   openAIResponseTierBillingEnabled.value = false
@@ -5283,6 +5484,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   codexImageToolMode.value = 'inherit'
   anthropicPassthroughEnabled.value = false
   anthropicStripClaudeCodeIdentityEnabled.value = false
+  cacheTtlBillingFromRequestEnabled.value = false
   anthropicMimicClaudeCodeEnabled.value = false
   anthropicMimicClaudeCodeDeductTokens.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
@@ -5327,6 +5529,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     extraImageModels.value = readExtraImageModels(extra?.extra_image_models)
     extraImageModelPrefixes.value = readExtraImageModels(extra?.extra_image_model_prefixes)
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
+    openaiPassthroughModelFilterEnabled.value = extra?.openai_passthrough_model_filter === true
     openaiFlattenNamespacesEnabled.value =
       newAccount.type === 'oauth' && extra?.openai_responses_flatten_namespaces === true
     const longContextBillingValue = extra?.openai_long_context_billing_enabled
@@ -5391,6 +5594,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   if (newAccount.platform === 'anthropic' && newAccount.type === 'apikey') {
     anthropicPassthroughEnabled.value = extra?.anthropic_passthrough === true
     anthropicStripClaudeCodeIdentityEnabled.value = extra?.anthropic_strip_claude_code_identity === true
+    cacheTtlBillingFromRequestEnabled.value = extra?.cache_ttl_billing_from_request === true
     anthropicMimicClaudeCodeEnabled.value =
       extra?.anthropic_mimic_claude_code === true && !anthropicStripClaudeCodeIdentityEnabled.value
     anthropicMimicClaudeCodeDeductTokens.value =
@@ -5657,6 +5861,10 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
     // Load model mappings for bedrock
     loadModelRestrictionFromMapping(bedrockCreds.model_mapping as Record<string, unknown> | undefined)
+  } else if (newAccount.type === 'gateway') {
+    gatewayKind.value = newAccount.credentials?.upstream_kind === 'new_api' ? 'new_api' : 'sub2api'
+    editBaseUrl.value = String(newAccount.credentials?.base_url || '')
+    loadModelRestrictionFromMapping(newAccount.credentials?.model_mapping as Record<string, unknown> | undefined)
   } else if (newAccount.type === 'upstream' && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
     editBaseUrl.value = (credentials.base_url as string) || ''
@@ -5698,6 +5906,32 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     selectedErrorCodes.value = []
   }
   editApiKey.value = ''
+  savedBillingBaseUrl.value = billingBaseUrl.value
+}
+
+const changePlatform = (platform: unknown) => {
+  const source = props.account
+  if (!source || typeof platform !== 'string' || platform === editingAccount.value?.platform ||
+      !platformOptions.value.some(option => option.value === platform)) return
+  const common = { ...form }
+  const pauseOnExpiry = autoPauseOnExpired.value
+  const currentCost = costMultiplier.value
+  const currentApiKey = editApiKey.value
+  const currentBaseUrl = editBaseUrl.value
+  const next = platform === source.platform ? source : platformAccountDraft(source, platform, selectableGroups.value)
+  editingAccount.value = next
+  syncFormFromAccount(next)
+  if (source.type === 'apikey') {
+    // These are portable edits owned by this dialog, including on switch-back.
+    // Keep them outside the persisted prop; reopening still resets the draft.
+    editApiKey.value = currentApiKey
+    editBaseUrl.value = currentBaseUrl
+  }
+  const compatibleGroups = form.group_ids
+  Object.assign(form, common, { group_ids: compatibleGroups })
+  autoPauseOnExpired.value = pauseOnExpiry
+  costMultiplier.value = currentCost
+  resetGrokDiagnostics()
 }
 
 async function loadTLSProfiles() {
@@ -5718,6 +5952,7 @@ watch(
       return
     }
     if (!wasShow || newAccount !== previousAccount) {
+      editingAccount.value = newAccount
       syncFormFromAccount(newAccount)
       loadTLSProfiles()
     }
@@ -5769,10 +6004,10 @@ const addAntigravityPresetMapping = (from: string, to: string) => {
 }
 
 const syncAntigravityUpstreamModels = async () => {
-  const account = props.account
+  const account = editingAccount.value
   if (!account?.id || isSyncingAntigravityUpstream.value) return
   const syncVersion = antigravityUpstreamSyncVersion
-  const isCurrentSync = () => syncVersion === antigravityUpstreamSyncVersion && props.show && props.account === account
+  const isCurrentSync = () => syncVersion === antigravityUpstreamSyncVersion && props.show && editingAccount.value === account
 
   isSyncingAntigravityUpstream.value = true
   try {
@@ -6021,7 +6256,7 @@ function loadAccountSchedulingThresholdOverride(
 const applyAccountSchedulingThresholdOverridePatch = (
   credentials: Record<string, unknown>,
   currentCredentials: Record<string, unknown>,
-  platform: Account['platform'] | undefined = props.account?.platform
+  platform: Account['platform'] | undefined = editingAccount.value?.platform
 ) => {
   if (!supportsAccountSchedulingThresholdOverridePlatform(platform)) {
     return
@@ -6234,7 +6469,7 @@ function toPositiveNumber(value: unknown) {
   return Math.trunc(num)
 }
 
-const needsMixedChannelCheck = () => props.account?.platform === 'antigravity' || props.account?.platform === 'anthropic'
+const needsMixedChannelCheck = () => editingAccount.value?.platform === 'antigravity' || editingAccount.value?.platform === 'anthropic'
 
 const buildMixedChannelDetails = (resp?: CheckMixedChannelResponse) => {
   const details = resp?.details
@@ -6286,15 +6521,15 @@ const ensureAntigravityMixedChannelConfirmed = async (onConfirm: () => Promise<v
   if (antigravityMixedChannelConfirmed.value) {
     return true
   }
-  if (!props.account) {
+  if (!editingAccount.value) {
     return false
   }
 
   try {
     const result = await adminAPI.accounts.checkMixedChannelRisk({
-      platform: props.account.platform,
+      platform: editingAccount.value.platform,
       group_ids: form.group_ids,
-      account_id: props.account.id
+      account_id: editingAccount.value.id
     })
     if (!result.has_risk) {
       return true
@@ -6371,7 +6606,7 @@ const saveAutoBPSRule = async (accountID: number) => {
 
 const submitUpdateAccount = async (accountID: number, updatePayload: Record<string, unknown>) => {
   if (releaseInitialModelSelection.value) {
-    updatePayload.credentials = { ...(updatePayload.credentials as Record<string, unknown> ?? props.account?.credentials), oauth_initial_selected_models: null }
+    updatePayload.credentials = { ...(updatePayload.credentials as Record<string, unknown> ?? editingAccount.value?.credentials), oauth_initial_selected_models: null }
   }
   submitting.value = true
   try {
@@ -6400,18 +6635,18 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
 
 const handleSubmit = async () => {
   if (bpsDefaults.loading.value) return
-  if (!props.account) return
+  if (!editingAccount.value) return
   if (openaiProxySupported.value &&
     openaiProxyMode.value === 'request' && openaiProxyIds.value.length === 0) {
     appStore.showError(t('admin.accounts.openai.proxyRequired'))
     return
   }
-  const accountID = props.account.id
-  if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isSparkShadow.value && (excelBPSEnabled.value || excelBPS403RecoveryPending.value) && excelBPSAutoDisableOn403.value && excelBPSAutoRecoverOn403.value && !isValidBPSRecoveryInterval(excelBPSRecoveryIntervalMinutes.value)) {
+  const accountID = editingAccount.value.id
+  if (editingAccount.value.platform === 'openai' && editingAccount.value.type === 'oauth' && !isSparkShadow.value && (excelBPSEnabled.value || excelBPS403RecoveryPending.value) && excelBPSAutoDisableOn403.value && excelBPSAutoRecoverOn403.value && !isValidBPSRecoveryInterval(excelBPSRecoveryIntervalMinutes.value)) {
     appStore.showError(t('admin.accounts.openai.excelBPS403RecoveryIntervalInvalid'))
     return
   }
-  if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isSparkShadow.value && excelBPSEnabled.value && excelBPSAutoMoveOn403.value) {
+  if (editingAccount.value.platform === 'openai' && editingAccount.value.type === 'oauth' && !isSparkShadow.value && excelBPSEnabled.value && excelBPSAutoMoveOn403.value) {
     const target = Number(excelBPS403TargetGroupID.value)
     if (excelBPS403TargetGroupID.value === '' || !Number.isSafeInteger(target) || target < 0 ||
       !excelBPS403GroupOptions.value.some(option => option.value === target)) {
@@ -6438,9 +6673,10 @@ const handleSubmit = async () => {
 	}
 
   const updatePayload: Record<string, unknown> = { ...form }
+  if (platformChanged.value) updatePayload.platform = editingAccount.value.platform
   // An unchanged OAuth status is a settings save, not an instruction to undo
   // an authentication failure or recovery that happened while the form was open.
-  if (props.account.platform === 'openai' && props.account.type === 'oauth' && form.status === props.account.status) {
+  if (editingAccount.value.platform === 'openai' && editingAccount.value.type === 'oauth' && form.status === editingAccount.value.status) {
     delete updatePayload.status
   }
   try {
@@ -6462,7 +6698,10 @@ const handleSubmit = async () => {
     updatePayload.auto_pause_on_expired = autoPauseOnExpired.value
     // 整体覆盖：只带仍勾选的分组，没有列出的分组由后端恢复为不限制
     updatePayload.group_allowed_models = buildGroupAllowedModelsPayload(form.group_ids, groupAllowedModels.value)
-    if (props.account.type === 'apikey') {
+    if (editingAccount.value.type === 'apikey') {
+      if (form.name === editingAccount.value.name) delete updatePayload.name
+      if (form.notes === (editingAccount.value.notes || '')) delete updatePayload.notes
+      updatePayload.upstream_billing_group_sync_enabled = upstreamGroupSyncEnabled.value
       updatePayload.upstream_billing_probe_enabled = upstreamBillingAutoProbeEnabled.value
       updatePayload.upstream_billing_rate_sync_enabled = upstreamBillingRateSyncEnabled.value
       if (upstreamBillingRateSyncEnabled.value) {
@@ -6471,10 +6710,10 @@ const handleSubmit = async () => {
     }
 
     // For apikey type, handle credentials update
-    if (props.account.type === 'apikey') {
-      const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
+    if (editingAccount.value.type === 'apikey') {
+      const currentCredentials = (editingAccount.value.credentials as Record<string, unknown>) || {}
       const newBaseUrl = editBaseUrl.value.trim() || defaultBaseUrl.value
-      const shouldApplyModelMapping = !(props.account.platform === 'openai' && (openaiPassthroughEnabled.value || copilotSDKEnabled.value))
+      const shouldApplyModelMapping = !isOpenAIModelRestrictionDisabled.value
 
       // Always update credentials for apikey type to handle model mapping changes
       const newCredentials: Record<string, unknown> = {
@@ -6497,11 +6736,11 @@ const handleSubmit = async () => {
         } else {
           delete newCredentials.api_base_urls
         }
-        if (providerRoutesByModel(props.account.platform)) {
+        if (providerRoutesByModel(editingAccount.value.platform)) {
           applyOpenCodeGoProtocolRules(newCredentials, editOpenCodeGoProtocolRules.value, 'edit')
         }
         // 智谱团队版 Coding Plan：组织/项目 ID 写入凭据（非空才写，清空即移除回落个人版路径）
-        if (props.account.platform === 'zhipu') {
+        if (editingAccount.value.platform === 'zhipu') {
           const org = editZhipuOrganization.value.trim()
           const project = editZhipuProject.value.trim()
           if (org) {
@@ -6515,7 +6754,7 @@ const handleSubmit = async () => {
         }
       }
 
-      if (props.account.platform === 'qwen') {
+      if (editingAccount.value.platform === 'qwen') {
         applyQwenCacheSettings(newCredentials, qwenSessionCache.value, qwenStrictAffinity.value)
       }
 
@@ -6525,7 +6764,7 @@ const handleSubmit = async () => {
       // 若后端尚未升级（无 credentials_status），回退读旧结构 currentCredentials.api_key。
       // 两者都无才报错。
       const hasExistingApiKey =
-        props.account.credentials_status?.has_api_key ?? Boolean(currentCredentials.api_key)
+        editingAccount.value.credentials_status?.has_api_key ?? Boolean(currentCredentials.api_key)
       if (editApiKey.value.trim()) {
         newCredentials.api_key = editApiKey.value.trim()
       } else if (!hasExistingApiKey) {
@@ -6544,7 +6783,7 @@ const handleSubmit = async () => {
       } else if (currentCredentials.model_mapping) {
         newCredentials.model_mapping = currentCredentials.model_mapping
       }
-      if (props.account.platform === 'openai') {
+      if (editingAccount.value.platform === 'openai') {
         applyOpenAIEndpointCapabilities(newCredentials)
         const compactModelMapping = buildModelMappingObject('mapping', [], openAICompactModelMappings.value)
         if (compactModelMapping) {
@@ -6572,7 +6811,7 @@ const handleSubmit = async () => {
 
       applyExplicitCacheUpstreamCredentials(
         newCredentials,
-        props.account.platform === 'gemini' && !isOfficialGeminiBaseUrl(editBaseUrl.value) && explicitCacheUpstreamEnabled.value,
+        editingAccount.value.platform === 'gemini' && !isOfficialGeminiBaseUrl(editBaseUrl.value) && explicitCacheUpstreamEnabled.value,
         explicitCacheUpstreamMaxTTL.value
       )
 
@@ -6586,9 +6825,11 @@ const handleSubmit = async () => {
       }
 
       // Add header override if enabled for this API-key platform
-      if (isHeaderOverrideCapable(props.account.platform, 'apikey')) {
+      if (isHeaderOverrideCapable(editingAccount.value.platform, 'apikey')) {
         if (headerOverrideEnabled.value) {
-          const headerError = validateHeaderOverrideRows(headerOverrideRows.value)
+          const headerError = validateHeaderOverrideRows(headerOverrideRows.value, {
+            allowVariables: headerOverrideAllowVariables.value
+          })
           if (headerError) {
             appStore.showError(t(`admin.accounts.headerOverride.${headerError}`))
             return
@@ -6605,8 +6846,16 @@ const handleSubmit = async () => {
       }
 
       updatePayload.credentials = newCredentials
-    } else if (props.account.type === 'upstream') {
-      const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
+    } else if (editingAccount.value.type === 'gateway') {
+      updatePayload.credentials = {
+        upstream_kind: gatewayKind.value,
+        base_url: editBaseUrl.value.trim(),
+        model_mapping: buildModelRestrictionMapping() ?? {},
+        ...(editApiKey.value.trim() ? { api_key: editApiKey.value.trim() } : {})
+      }
+      if (gatewayKind.value === 'sub2api') updatePayload.upstream_billing_probe_enabled = upstreamBillingAutoProbeEnabled.value
+    } else if (editingAccount.value.type === 'upstream') {
+      const currentCredentials = (editingAccount.value.credentials as Record<string, unknown>) || {}
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
 
       newCredentials.base_url = editBaseUrl.value.trim()
@@ -6624,10 +6873,10 @@ const handleSubmit = async () => {
       }
 
       updatePayload.credentials = newCredentials
-    } else if ((props.account.platform === 'gemini' || props.account.platform === 'anthropic') && props.account.type === 'service_account') {
-      const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
+    } else if ((editingAccount.value.platform === 'gemini' || editingAccount.value.platform === 'anthropic') && editingAccount.value.type === 'service_account') {
+      const currentCredentials = (editingAccount.value.credentials as Record<string, unknown>) || {}
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
-      const credentialsStatus = props.account.credentials_status
+      const credentialsStatus = editingAccount.value.credentials_status
 
       if (isVertexAPIKeyMode.value) {
         // API Key 已脱敏不再随 credentials 返回，存在性读 credentials_status；留空表示保留原 Key。
@@ -6699,8 +6948,8 @@ const handleSubmit = async () => {
       }
 
       updatePayload.credentials = newCredentials
-    } else if (props.account.type === 'bedrock') {
-      const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
+    } else if (editingAccount.value.type === 'bedrock') {
+      const currentCredentials = (editingAccount.value.credentials as Record<string, unknown>) || {}
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
 
       newCredentials.aws_region = editBedrockRegion.value.trim()
@@ -6759,7 +7008,7 @@ const handleSubmit = async () => {
       updatePayload.credentials = newCredentials
     } else {
       // For oauth/setup-token types, only update intercept_warmup_requests if changed
-      const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
+      const currentCredentials = (editingAccount.value.credentials as Record<string, unknown>) || {}
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
 
       applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
@@ -6772,13 +7021,13 @@ const handleSubmit = async () => {
     }
 
     // OpenAI/Grok OAuth: persist model mapping to credentials
-    if ((props.account.platform === 'openai' || props.account.platform === 'grok') && props.account.type === 'oauth') {
+    if ((editingAccount.value.platform === 'openai' || editingAccount.value.platform === 'grok') && editingAccount.value.type === 'oauth') {
       const currentCredentials = isSparkShadow.value
         ? {}
         : (updatePayload.credentials as Record<string, unknown>) ||
-          ((props.account.credentials as Record<string, unknown>) || {})
+          ((editingAccount.value.credentials as Record<string, unknown>) || {})
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
-      if (props.account.platform === 'openai') {
+      if (editingAccount.value.platform === 'openai') {
         applyOpenAIModelMappingCredentials(newCredentials)
       } else {
         const modelMapping = buildModelRestrictionMapping()
@@ -6794,10 +7043,10 @@ const handleSubmit = async () => {
 
     // Grok OAuth: 自定义上游地址 + 请求头覆写。base_url 仅改写转发端点，
     // OAuth 授权与令牌刷新链路不读取该值；关闭开关即恢复默认官方网关。
-    if (props.account.platform === 'grok' && props.account.type === 'oauth') {
+    if (editingAccount.value.platform === 'grok' && editingAccount.value.type === 'oauth') {
       const currentCredentials =
         (updatePayload.credentials as Record<string, unknown>) ||
-        ((props.account.credentials as Record<string, unknown>) || {})
+        ((editingAccount.value.credentials as Record<string, unknown>) || {})
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
 
       if (grokOAuthCustomBaseUrlEnabled.value) {
@@ -6816,7 +7065,9 @@ const handleSubmit = async () => {
       }
 
       if (headerOverrideEnabled.value) {
-        const headerError = validateHeaderOverrideRows(headerOverrideRows.value)
+        const headerError = validateHeaderOverrideRows(headerOverrideRows.value, {
+            allowVariables: headerOverrideAllowVariables.value
+          })
         if (headerError) {
           appStore.showError(t(`admin.accounts.headerOverride.${headerError}`))
           return
@@ -6827,7 +7078,7 @@ const handleSubmit = async () => {
       updatePayload.credentials = newCredentials
 
       const newExtra: Record<string, unknown> = {
-        ...((props.account.extra as Record<string, unknown>) || {})
+        ...((editingAccount.value.extra as Record<string, unknown>) || {})
       }
       // Persist both states so a disabled account remains opted out when the
       // backend applies the default-enabled policy to missing values.
@@ -6835,9 +7086,9 @@ const handleSubmit = async () => {
       updatePayload.extra = newExtra
     }
 
-    if (props.account.platform === 'grok') {
+    if (editingAccount.value.platform === 'grok') {
       updatePayload.extra = {
-        ...((props.account.extra as Record<string, unknown>) || {}),
+        ...((editingAccount.value.extra as Record<string, unknown>) || {}),
         ...((updatePayload.extra as Record<string, unknown>) || {}),
         [GROK_SKIP_FORBIDDEN_PAUSE_EXTRA_KEY]: grokSkipForbiddenPause.value
       }
@@ -6846,19 +7097,19 @@ const handleSubmit = async () => {
     // OpenAI: 手动覆盖订阅档位 plan_type（Plus / Pro 20x / Pro 5x / Business Standard / Business Premium / Free）。
     // 仅 OAuth 非影子账号：
     // 影子账号凭据由母账号管理(且后端会 sanitize),setup-token 无订阅调度语义。
-    if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isSparkShadow.value) {
+    if (editingAccount.value.platform === 'openai' && editingAccount.value.type === 'oauth' && !isSparkShadow.value) {
       const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
-        ((props.account.credentials as Record<string, unknown>) || {})
+        ((editingAccount.value.credentials as Record<string, unknown>) || {})
       updatePayload.credentials = applyPlanType({ ...currentCredentials }, editPlanType.value)
     }
 
     // Antigravity: persist model mapping to credentials (applies to all antigravity types)
     // Antigravity 只支持映射模式
-    if (props.account.platform === 'antigravity') {
+    if (editingAccount.value.platform === 'antigravity') {
       const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
-        ((props.account.credentials as Record<string, unknown>) || {})
+        ((editingAccount.value.credentials as Record<string, unknown>) || {})
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
-      if (props.account.type === 'oauth') {
+      if (editingAccount.value.type === 'oauth') {
         applyAntigravityProjectID(newCredentials, antigravityProjectId.value, 'edit')
       }
 
@@ -6880,8 +7131,8 @@ const handleSubmit = async () => {
     }
 
     // For antigravity accounts, handle mixed_scheduling and allow_overages in extra
-    if (props.account.platform === 'antigravity') {
-      const currentExtra = (props.account.extra as Record<string, unknown>) || {}
+    if (editingAccount.value.platform === 'antigravity') {
+      const currentExtra = (editingAccount.value.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
       if (mixedScheduling.value) {
         newExtra.mixed_scheduling = true
@@ -6897,8 +7148,8 @@ const handleSubmit = async () => {
     }
 
     // For Anthropic OAuth/SetupToken accounts, handle quota control settings in extra
-    if (props.account.platform === 'anthropic' && (props.account.type === 'oauth' || props.account.type === 'setup-token')) {
-      const currentExtra = (updatePayload.extra as Record<string, unknown>) || (props.account.extra as Record<string, unknown>) || {}
+    if (editingAccount.value.platform === 'anthropic' && (editingAccount.value.type === 'oauth' || editingAccount.value.type === 'setup-token')) {
+      const currentExtra = (updatePayload.extra as Record<string, unknown>) || (editingAccount.value.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
 
       // Window cost limit settings
@@ -6976,8 +7227,8 @@ const handleSubmit = async () => {
     }
 
     // For Anthropic API Key accounts, handle passthrough mode + web search emulation in extra
-    if (props.account.platform === 'anthropic' && props.account.type === 'apikey') {
-      const currentExtra = (updatePayload.extra as Record<string, unknown>) || (props.account.extra as Record<string, unknown>) || {}
+    if (editingAccount.value.platform === 'anthropic' && editingAccount.value.type === 'apikey') {
+      const currentExtra = (updatePayload.extra as Record<string, unknown>) || (editingAccount.value.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
       if (anthropicPassthroughEnabled.value) {
         newExtra.anthropic_passthrough = true
@@ -6988,6 +7239,11 @@ const handleSubmit = async () => {
         newExtra.anthropic_strip_claude_code_identity = true
       } else {
         delete newExtra.anthropic_strip_claude_code_identity
+      }
+      if (cacheTtlBillingFromRequestEnabled.value) {
+        newExtra.cache_ttl_billing_from_request = true
+      } else {
+        delete newExtra.cache_ttl_billing_from_request
       }
       if (anthropicMimicClaudeCodeEnabled.value) {
         newExtra.anthropic_mimic_claude_code = true
@@ -7013,16 +7269,16 @@ const handleSubmit = async () => {
     }
 
     // For OpenAI OAuth/SetupToken/API Key accounts, handle passthrough mode in extra
-    if (props.account.platform === 'openai' && (props.account.type === 'oauth' || props.account.type === 'setup-token' || props.account.type === 'apikey')) {
-      const currentExtra = (props.account.extra as Record<string, unknown>) || {}
+    if (editingAccount.value.platform === 'openai' && (editingAccount.value.type === 'oauth' || editingAccount.value.type === 'setup-token' || editingAccount.value.type === 'apikey')) {
+      const currentExtra = (editingAccount.value.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
-      if (props.account.type === 'oauth' && !isSparkShadow.value) newExtra.openai_siwc = siwcEnabled.value
+      if (editingAccount.value.type === 'oauth' && !isSparkShadow.value) newExtra.openai_siwc = siwcEnabled.value
       newExtra.openai_request_timezone = openAIRequestTimezone.value
-      if (props.account.type === 'apikey') {
+      if (editingAccount.value.type === 'apikey') {
         newExtra.extra_image_models = parseExtraImageModels(extraImageModels.value)
         newExtra.extra_image_model_prefixes = parseExtraImageModels(extraImageModelPrefixes.value)
       }
-      if (props.account.type === 'oauth') {
+      if (editingAccount.value.type === 'oauth') {
         applyAccountRPMSettings(newExtra, {
           enabled: rpmLimitEnabled.value,
           baseRpm: baseRpm.value,
@@ -7030,7 +7286,7 @@ const handleSubmit = async () => {
         })
       }
       const hadCodexCLIOnlyEnabled = currentExtra.codex_cli_only === true
-      if (props.account.type === 'oauth' && !isSparkShadow.value && excelBPSEnabled.value) {
+      if (editingAccount.value.type === 'oauth' && !isSparkShadow.value && excelBPSEnabled.value) {
         newExtra.openai_excel_bps = true
         newExtra.openai_excel_bps_config_mode = excelBPSMode.value
         if (excelBPSAllModels.value) {
@@ -7083,7 +7339,7 @@ const handleSubmit = async () => {
         delete newExtra.openai_excel_bps_ignore_encrypted_content
       }
       // Preserve hidden routing options when editing a 403-disabled account.
-      const preserveDisabledBPS = props.account.type === 'oauth' && !isSparkShadow.value &&
+      const preserveDisabledBPS = editingAccount.value.type === 'oauth' && !isSparkShadow.value &&
         !excelBPSEnabled.value && excelBPS403RecoveryPending.value
       if (preserveDisabledBPS) {
         for (const key of ['openai_excel_bps_config_mode', 'openai_excel_bps_models', 'openai_excel_bps_mihomo', 'openai_excel_bps_proxy_source',
@@ -7113,21 +7369,21 @@ const handleSubmit = async () => {
         delete newExtra.openai_excel_bps_auto_move_on_403
         delete newExtra.openai_excel_bps_403_target_group_id
       }
-      if (props.account.type === 'oauth' || props.account.type === 'setup-token') {
+      if (editingAccount.value.type === 'oauth' || editingAccount.value.type === 'setup-token') {
         newExtra.openai_oauth_responses_websockets_v2_mode = openaiOAuthResponsesWebSocketV2Mode.value
         newExtra.openai_oauth_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiOAuthResponsesWebSocketV2Mode.value)
-      } else if (props.account.type === 'apikey') {
+      } else if (editingAccount.value.type === 'apikey') {
         newExtra.openai_apikey_responses_websockets_v2_mode = openaiAPIKeyResponsesWebSocketV2Mode.value
         newExtra.openai_apikey_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiAPIKeyResponsesWebSocketV2Mode.value)
       }
-      if (props.account.type === 'oauth' && openaiOAuthWSSSEAcceleration.value) {
+      if (editingAccount.value.type === 'oauth' && openaiOAuthWSSSEAcceleration.value) {
         newExtra.openai_oauth_ws_sse_acceleration = true
       } else {
         delete newExtra.openai_oauth_ws_sse_acceleration
       }
       delete newExtra.responses_websockets_v2_enabled
       delete newExtra.openai_ws_enabled
-      if (props.account.type === 'apikey' && copilotSDKEnabled.value) {
+      if (editingAccount.value.type === 'apikey' && copilotSDKEnabled.value) {
         newExtra.openai_copilot_sdk = true
       } else {
         delete newExtra.openai_copilot_sdk
@@ -7138,8 +7394,13 @@ const handleSubmit = async () => {
         delete newExtra.openai_passthrough
         delete newExtra.openai_oauth_passthrough
       }
+      if (openaiPassthroughEnabled.value && openaiPassthroughModelFilterEnabled.value) {
+        newExtra.openai_passthrough_model_filter = true
+      } else {
+        delete newExtra.openai_passthrough_model_filter
+      }
       // 缺省即保留 namespace，不写空值，避免 extra 里堆积默认项
-      if (props.account.type === 'oauth' && openaiFlattenNamespacesEnabled.value) {
+      if (editingAccount.value.type === 'oauth' && openaiFlattenNamespacesEnabled.value) {
         newExtra.openai_responses_flatten_namespaces = true
       } else {
         delete newExtra.openai_responses_flatten_namespaces
@@ -7149,7 +7410,7 @@ const handleSubmit = async () => {
       } else {
         newExtra.openai_long_context_billing_enabled = openAILongContextBillingEnabled.value
       }
-      if (props.account.type === 'apikey' && openAIResponseTierBillingEnabled.value) {
+      if (editingAccount.value.type === 'apikey' && openAIResponseTierBillingEnabled.value) {
         newExtra.openai_response_tier_billing_enabled = true
       } else {
         delete newExtra.openai_response_tier_billing_enabled
@@ -7159,7 +7420,7 @@ const handleSubmit = async () => {
       } else {
         newExtra.openai_compact_mode = openAICompactMode.value
       }
-      if (props.account.type === 'oauth') {
+      if (editingAccount.value.type === 'oauth') {
         if (prismBrowserEnabled.value) {
           newExtra.openai_prism_browser = true
           newExtra.openai_prism_browser_models = prismSupportedModels.filter(model => prismBrowserModels.value.includes(model))
@@ -7168,7 +7429,7 @@ const handleSubmit = async () => {
           delete newExtra.openai_prism_browser_models
         }
       }
-		if (props.account.type === 'apikey') {
+		if (editingAccount.value.type === 'apikey') {
         if (!openAITextGenerationCapabilityEnabled.value || openAIResponsesMode.value === 'auto') {
           delete newExtra.openai_responses_mode
         } else {
@@ -7205,7 +7466,7 @@ const handleSubmit = async () => {
 		} else {
 			delete newExtra.auto_pause_7d_disabled
 		}
-		if (props.account.type === 'oauth' && !isSparkShadow.value) {
+		if (editingAccount.value.type === 'oauth' && !isSparkShadow.value) {
 			newExtra.auto_reset_credit_enabled = autoResetCreditEnabled.value
 			newExtra.auto_reset_credit_5h_threshold = autoResetCredit5hThreshold.value / 100
 			newExtra.auto_reset_credit_7d_threshold = autoResetCredit7dThreshold.value / 100
@@ -7229,7 +7490,7 @@ const handleSubmit = async () => {
           delete newExtra.codex_image_generation_explicit_tool_policy
       }
 
-      if (props.account.type === 'oauth' || props.account.type === 'setup-token') {
+      if (editingAccount.value.type === 'oauth' || editingAccount.value.type === 'setup-token') {
         if (codexCLIOnlyEnabled.value) {
           newExtra.codex_cli_only = true
         } else if (hadCodexCLIOnlyEnabled) {
@@ -7249,7 +7510,7 @@ const handleSubmit = async () => {
 
       // 指纹收敛模式：默认 off（不写入）；device/session/full 是显式 opt-in，
       // 必须落键，否则管理员的选择会被后端当作"未设置"而回落到 off（#5610）。
-      if (props.account.type === 'oauth') {
+      if (editingAccount.value.type === 'oauth') {
         if (codexFingerprintMode.value !== 'off') {
           newExtra.codex_fingerprint_mode = codexFingerprintMode.value
         } else {
@@ -7261,15 +7522,16 @@ const handleSubmit = async () => {
     }
 
     // For apikey/bedrock/service_account accounts, handle quota_limit in extra
-    if (supportsAccountQuota(props.account.type)) {
+    if (supportsAccountQuota(editingAccount.value.type)) {
       const currentExtra = (updatePayload.extra as Record<string, unknown>) ||
-        (props.account.extra as Record<string, unknown>) || {}
+        (editingAccount.value.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
       // 上游倍率自动探测对全部 API-key 平台开放（sub2api 上游即可应答），
       // Bedrock 凭证无静态 Key 不参与。
-      if (props.account.type === 'apikey') {
+      if (editingAccount.value.type === 'apikey') {
         delete newExtra.upstream_billing_probe_enabled
         delete newExtra.upstream_billing_rate_sync_enabled
+        delete newExtra.upstream_billing_group_sync_enabled
       }
       // Total quota
       if (editQuotaLimit.value != null && editQuotaLimit.value > 0) {
@@ -7322,8 +7584,8 @@ const handleSubmit = async () => {
 
     // 上游ID头名只在改动时写回 extra，避免用弹窗打开时的快照覆盖运行态键。
     const nextUpstreamRequestIdHeader = upstreamRequestIdHeader.value.trim()
-    if (nextUpstreamRequestIdHeader !== readUpstreamRequestIdHeader(props.account.extra)) {
-      const currentExtra = (updatePayload.extra as Record<string, unknown>) || (props.account.extra as Record<string, unknown>) || {}
+    if (nextUpstreamRequestIdHeader !== readUpstreamRequestIdHeader(editingAccount.value.extra)) {
+      const currentExtra = (updatePayload.extra as Record<string, unknown>) || (editingAccount.value.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
       if (nextUpstreamRequestIdHeader) {
         newExtra.upstream_request_id_header = nextUpstreamRequestIdHeader
@@ -7338,18 +7600,57 @@ const handleSubmit = async () => {
       return
     }
     const costExtra: Record<string, unknown> = {
-      ...((updatePayload.extra as Record<string, unknown>) || props.account.extra || {})
+      ...((updatePayload.extra as Record<string, unknown>) || editingAccount.value.extra || {})
+    }
+    // This API-only setting has no editor control. Omit the loaded value so
+    // the repository keeps the latest basis, including a concurrent clear.
+    delete costExtra.token_procurement_basis
+    const originalPrices = readImagePrices(editingAccount.value.extra)
+    if (purchaseTiers.some(tier => String(imagePurchasePrices.value[tier]) !== String(originalPrices[tier]))) {
+      const prices: Record<string, number> = {}
+      for (const tier of purchaseTiers) {
+        const value = imagePurchasePrices.value[tier]
+        if (value === '') continue
+        const price = Number(value)
+        if (!isValidAccountCostMultiplier(price)) {
+          appStore.showError(t('admin.accounts.costMultiplierInvalid'))
+          return
+        }
+        prices[tier] = price
+      }
+      costExtra.image_purchase_prices = prices
+    } else {
+      delete costExtra.image_purchase_prices
     }
     // An unrelated edit must not restore a cost loaded before a probe updated it.
-    if (costMultiplier.value !== readAccountCostMultiplier(props.account.extra)) {
+    if (costMultiplier.value !== readAccountCostMultiplier(editingAccount.value.extra)) {
       costExtra.cost_multiplier = costMultiplier.value
     } else {
       delete costExtra.cost_multiplier
     }
-    if (props.account.type === 'apikey' && costMultiplierAutoSync.value !== (props.account.extra?.cost_multiplier_auto_sync !== false)) {
+    if (editingAccount.value.type === 'apikey' && costMultiplierAutoSync.value !== (editingAccount.value.extra?.cost_multiplier_auto_sync !== false)) {
       costExtra.cost_multiplier_auto_sync = costMultiplierAutoSync.value
     } else {
       delete costExtra.cost_multiplier_auto_sync
+    }
+    if (editingAccount.value.platform === 'anthropic') {
+      const minimum = probePenaltyMinimum.value
+      if (!Number.isFinite(minimum) || minimum < 0 || minimum > 1000 || (probePenaltyEnabled.value && minimum <= 0) || Math.abs(minimum * 1e8 - Math.round(minimum * 1e8)) > 0.00001) {
+        appStore.showError(t('admin.accounts.probePenalty.invalid'))
+        return
+      }
+      const original = editingAccount.value.extra?.probe_penalty as { enabled?: boolean; minimum_charge?: number } | undefined
+      if (probePenaltyEnabled.value !== (original?.enabled === true) || minimum !== (original?.minimum_charge ?? 0.001)) {
+        costExtra.probe_penalty = { enabled: probePenaltyEnabled.value, minimum_charge: minimum }
+      } else {
+        delete costExtra.probe_penalty
+      }
+    }
+    delete costExtra.new_api_apply_usd_rate
+    if (supportsDomesticRouteProbe.value && domesticRouteAutoSchedule.value) {
+      costExtra.domestic_route_auto_schedule = true
+    } else {
+      delete costExtra.domestic_route_auto_schedule
     }
     updatePayload.extra = costExtra
 

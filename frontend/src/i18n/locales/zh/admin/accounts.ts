@@ -1,5 +1,12 @@
 export default {
     accounts: {
+      domesticRouteAutoSchedule: '国模线路测试自动调度',
+      domesticRouteAutoScheduleHint: '每小时沿此账号的出口发送一次短流式请求，可能消耗上游额度。首字低于 3 秒开启调度，达到 3 秒、超时或上游失败时关闭。暂停调度期间继续复测。',
+      platformSwitch: {
+        hint: '可切换到兼容当前凭证类型的平台。API Key 和自定义地址保留，请确认目标平台支持该上游。',
+        resetHint: '切换后将重置模型映射、平台专属设置及不兼容分组。请检查目标平台配置，保存后再同步模型或刷新用量。',
+        boundCredentials: '当前授权类型或影子账号与平台绑定。请在目标平台新建账号并完成授权。'
+      },
       timer: {
         "manage": "定时任务",
         "planType": "任务类型",
@@ -286,6 +293,14 @@ export default {
         }
       },
       upstreamBilling: {
+        autoSyncGroup: '自动同步上游分组名称与备注',
+        autoSyncGroupHint: '成功探测后，上游提供的名称和描述会覆盖本地名称与备注。账号倍率由单独的开关控制。',
+        syncGroup: '同步上游分组名称与备注',
+        saveGroup: '同步并保存上游分组名称与备注',
+        groupCredentials: '请填写上游地址和 API Key。更换地址或代理后需重新输入密钥。',
+        groupUnavailable: '上游没有返回可同步的分组名称或描述。',
+        groupFailed: '同步上游分组信息失败',
+        groupSynced: '账号名称与备注已同步',
         newAPI: {
           upstreamVerificationFailed: "无法完成上游查询。请检查站点是否可访问、用户 ID 和访问令牌是否有效，以及令牌是否允许查询钱包和完整令牌列表。",
           keyNotOwned: "该账号的 API Key 未出现在此用户的令牌列表中。",
@@ -306,13 +321,23 @@ export default {
           boundUser: "已配置用户 {id}",
           preview: "预览",
           save: "验证并保存",
-          wallet: "钱包余额（标准化 USD）：{amount}",
+          wallet: "钱包余额：{amount}",
           matched: "已匹配 API Key",
           needsSelection: "请选择对应令牌",
           group: "分组：{name}",
           groupRatio: "分组倍率",
           ratio: "分组倍率：{value}x",
-          groupRatioHint: "分组倍率仅表示该分组的计费系数，不代表所有模型的实际费用倍率，也不会修改本地账号倍率。",
+          convertedDeclaration: '声明倍率换算：{rate} × 7 = {value}x',
+          groupRatioHint: '上游分组倍率未包含模型价格；采购成本按账号的汇率与自动同步设置更新，不改变客户售价。',
+        costConversion: '采购成本倍率换算',
+        costConversionHint: '默认应用美元汇率：CN 平台 ×1，非 CN 平台 ×7。取消勾选则按上游倍率 ×1 作为采购成本，不改变客户售价。',
+        applyUSDRate: '应用美元汇率',
+        requestPlatformFactor: '按每次请求的目标平台换算采购成本',
+        costPlatformFactor: '平台自动换算 ×{factor}',
+        costPreview: '采购成本倍率：{rate} × {scale} = {cost}',
+        costSyncPaused: '此账号已关闭采购成本自动同步，保留手动成本；可在编辑账号中开启。',
+        costUnavailable: '未取得固定分组倍率，保持已有采购成本。',
+        costManagedHint: 'New API 按平台自动换算采购成本；是否应用美元汇率在「上游渠道声明」配置中管理。',
           noFixedRatio: "无固定分组倍率",
           chooseToken: "多个令牌可能匹配，请选择该账号对应的令牌",
           chooseTokenPlaceholder: "选择令牌",
@@ -407,6 +432,7 @@ export default {
       subscriptionExpires: '到期',
       // 容量状态提示
       capacity: {
+        concurrencyUnavailable: '当前并发占用暂不可用，请刷新重试',
         windowCost: {
           blocked: '5h窗口费用超限，账号暂停调度',
           stickyOnly: '5h窗口费用达阈值，仅允许粘性会话',
@@ -477,6 +503,8 @@ export default {
       testConnection: '测试连接',
       reAuthorize: '重新授权',
       refreshToken: '刷新令牌',
+      refreshTokenHint: '系统已在后台自动刷新令牌，频繁手动刷新可能与自动刷新相互冲突，导致令牌失效、账号被暂停',
+      refreshTokenFrequentWarning: '距离上次手动刷新不足一分钟：频繁刷新可能与后台自动刷新冲突，导致令牌失效。如无必要请稍候再试。',
       noAccountsYet: '暂无账号',
       createFirstAccount: '添加 AI 平台账号以开始使用 API 网关。',
       tokenRefreshed: 'Token 刷新成功',
@@ -744,6 +772,10 @@ export default {
         grokLastHeadersSeen: '响应头 {time}',
         passiveSampled: '被动采样',
         activeQuery: '查询',
+        quotaRefreshFailedCached: '刷新失败，当前显示历史额度，不能确认剩余额度。',
+        quotaRefreshFailedUnknown: '刷新失败，当前额度未知。',
+        quotaObservedAt: '额度采样时间：',
+        quotaObservationUnknown: '未知（历史缓存）',
         estimatedTotalCost: '预计总费用 ${cost}',
         estimatedTotalCostTooltip: '根据当前窗口费用和使用率估算达到 100% 使用率时的总费用'
       },
@@ -925,6 +957,7 @@ export default {
       failedToRefresh: '刷新 Cookie 失败',
       // Create/Edit Account Modal
       platform: '平台',
+      gatewayProvider: '上游类型',
       accountName: '账号名称',
       enterAccountName: '请输入账号名称',
       accountType: '账号类型',
@@ -1086,13 +1119,16 @@ export default {
         copilotSDKDesc: '保留 Codex 原生工具结构，断连时取消 SDK 回合。请使用仅含一个 sidecar 账号的独立分组；Base URL 和 API Key 填适配服务地址及密钥。',
         oauthPassthroughDesc:
           '开启后，该 OpenAI 账号将自动透传请求与响应，仅替换认证并保留计费/并发/审计及必要安全过滤；如遇兼容性问题可随时关闭回滚。',
+        passthroughModelFilter: '透传时按账号模型筛选',
+        passthroughModelFilterDesc:
+          '使用账号模型白名单与映射的来源模型名筛选候选账号，映射目标不会改写透传请求的模型名。列表为空时允许所有模型。默认关闭。',
         flattenNamespaces: '摊平 Codex namespace 工具（兼容）',
         flattenNamespacesDesc:
           '默认关闭：/responses 上的 namespace 工具声明原样转发，这正是 ChatGPT Codex 后端期望的形态。仅当该 OAuth 账号指向不认识 namespace 的兼容上游时才开启——摊平会把工具改名为 namespace__tool，使按 functions.<命名空间>.<工具> 寻址的模型（如 gpt-5.6 多智能体）无法调用。压缩（compact）请求不受该开关影响，始终摊平。',
         longContextBilling: 'API 长上下文计费',
         longContextBillingDesc: '默认关闭。仅当该账号的上游会按模型阈值收取 OpenAI API 长上下文费率时开启。',
         ultrafastBilling: 'UltraFast 档位计费',
-        ultrafastBillingDesc: '默认关闭。开启后识别上游响应中的 service_tier；该账号所有模型遇到 ultrafast 时按模型标准单价 ×6（含缓存读写），再乘账号/分组倍率。未返回档位时按请求档位结算。客户端请求 ultrafast 且最终仍按该档位结算时，关闭本开关也按6倍计费。本开关不强制上游使用 UltraFast。',
+        ultrafastBillingDesc: '默认关闭。开启后识别上游响应中的 service_tier；ultrafast 按模型标准价及 UltraFast 倍率计费，包含缓存读写。GPT-6.2 Sol/Astra 在 2027-03-01 00:00（太平洋时间）前为 3 倍，之后为 6 倍；其他模型默认 6 倍，渠道覆盖和免费 UltraFast 设置仍生效。未返回档位时按请求档位结算；关闭本开关不免除显式 UltraFast 请求的溢价，也不强制上游加速。',
         responsesWebsocketsV2: 'Responses WebSocket v2',
         responsesWebsocketsV2Desc:
           '默认关闭。开启后可启用 responses_websockets_v2 协议能力（受网关全局开关与账号类型开关约束）。',
@@ -1196,7 +1232,7 @@ export default {
         testModeDefault: '常规请求',
         testModeCompact: 'Compact 探测',
         testModeBPSTools: 'BPS 工具往返（最多 3 次上游请求）',
-        modelRestrictionDisabledByPassthrough: '已开启自动透传：模型白名单/映射不会生效。',
+        modelRestrictionDisabledByPassthrough: '自动透传默认忽略模型限制；开启“透传时按账号模型筛选”后，模型限制仅用于筛选候选账号。',
       },
       grok: {
         baseUrlHint: 'Grok OAuth 账号会转发到官方 xAI API Base URL。',
@@ -1253,6 +1289,9 @@ export default {
         apiKeyPassthrough: '自动透传（仅替换认证）',
         apiKeyPassthroughDesc:
           '仅对 Anthropic API Key 生效。开启后，messages/count_tokens 请求将透传上游并仅替换认证，保留计费/并发/审计及必要安全过滤；关闭即可回滚到现有兼容链路。',
+        cacheTtlBillingFromRequest: '按客户端请求的缓存 TTL 计费',
+        cacheTtlBillingFromRequestDesc:
+          '仅对 Anthropic API Key 生效，适用于上游强制改写缓存 TTL 的二级中转。开启后，缓存写入按客户端请求里的 cache_control.ttl 计费：任一断点显式请求 1h 时，该请求的全部缓存写入按 1h 计费（混合 TTL 不按断点拆分）；未设置或只请求 5m 时按 5m 计费；不改动请求和响应内容。上游不再按 5m 结算时应关闭，否则 5m 请求可能亏损。',
         stripClaudeCodeIdentity: '抹除 Claude Code 身份',
         stripClaudeCodeIdentityDesc:
           '仅对 Anthropic API Key 生效。开启后，转发与测试连接时自动剥离 Claude Code / Agent SDK 客户端特征（替换 claude-cli User-Agent、移除 claude-code/oauth beta、剔除 system 中的 x-anthropic-billing-header 块与官方 CLI/SDK 身份句、移除 metadata.user_id），避免限制 Claude Code 调用的官方 API Key（如 sk-ant-usr-* 额度 Key）被上游拒绝并返回余额不足错误。',
@@ -1290,6 +1329,24 @@ export default {
       targetNoWildcard: '目标模型不能包含通配符 *',
       searchModels: '搜索模型...',
       noMatchingModels: '没有匹配的模型',
+      batchUpstream: {
+        stop: '停止排队',
+        retry: '仅重试失败账号',
+        submitted: '已提交',
+        stopped: '未启动',
+        unchanged: '已是最新',
+        empty: '上游目录为空',
+        account_policy: '账号策略保护',
+        account_changed: '同步期间账号已变更',
+        unverified_catalog: '没有已验证的上游目录',
+        unknown: '重试前请核对账号状态',
+        draining: '正在等待上一轮已提交的账号完成。',
+        start: '批量同步上游模型',
+        hint: '按选中账号各自已保存的连接立即同步白名单，保留有效别名。空目录或不支持同步时保留原白名单。停止或关闭只停止排队，已提交请求仍可能保存。其他编辑需单独提交。',
+        saved: '已保存',
+        failed: '失败',
+        pending: '待处理',
+      },
       fillRelatedModels: '同步最新支持模型',
       syncUpstreamModels: '同步上游支持的模型',
       syncUpstreamModelsLoading: '同步上游中...',
@@ -1306,6 +1363,7 @@ export default {
       enterCustomModelName: '输入自定义模型名称',
       addModel: '填入',
       modelExists: '该模型已存在',
+      modelWildcardNotSupported: '模型白名单不支持通配符，请输入完整的模型名称。',
       modelMappingConflict: '该模型已配置映射 {from} → {to}，请在模型映射中修改或删除后再添加白名单模型',
       modelCount: '{count} 个模型',
       poolMode: '池模式',
@@ -1357,7 +1415,25 @@ export default {
         blockedName: '该请求头不允许覆写（认证头与连接控制头由系统管理）',
         duplicateName: '存在重复的请求头名称（匹配不区分大小写）',
         invalidValue: '请求头值不合法（不允许控制字符，长度不超过 8192）',
-        tooManyEntries: '请求头覆写条目过多（最多 64 条）'
+        tooManyEntries: '请求头覆写条目过多（最多 64 条）',
+        invalidVariable: '变量写法不正确：请从下方「身份上报变量」中选择，不支持其它变量名',
+        variableNotAllowed: 'OAuth 账号不支持身份上报变量，请删除该行或改为固定值',
+        removeRow: '删除该请求头',
+        previewLabel: '发送示例',
+        variablesTitle: '身份上报变量',
+        variablesHint: '把网关内的用户身份随请求头报给上游，方便逐层定位到具体用户。光标在某个值输入框内时点击变量会插入到光标处，否则新增一行。',
+        variablesUnavailable: 'OAuth 账号不支持身份上报变量：订阅上游不会收到网关内的用户身份，这里只能填写固定值。',
+        variables: {
+          user_id: { label: '用户 ID', desc: '发起请求的网关用户' },
+          api_key_id: { label: 'API Key ID', desc: '本次请求使用的 Key，同一用户多把 Key 时可区分' },
+          group_id: { label: '分组 ID', desc: 'Key 绑定的分组；未绑定分组时该请求头不发送' },
+          request_id: { label: '请求 ID', desc: '与错误记录里的「请求 ID」一致，可直接对账；字母数字和 . _ - 以外的字符会替换为下划线' }
+        },
+        variableNotes: {
+          unresolved: '取不到值时（测试连接、模型同步等没有用户的后台请求）整条请求头不发送，也不会沿用客户端自带的同名头。',
+          apiKeyOnly: '仅对 API Key 账号生效，OAuth 账号永远不会上报。',
+          websocket: 'OpenAI WebSocket 模式下握手头按连接发送：含请求 ID 的请求头不发送，不同上报身份的请求不会共用上游连接。'
+        }
       },
       grokModelDiagnostics: {
         title: '模型目录诊断',
@@ -1572,6 +1648,14 @@ export default {
       priorityHint: '优先级越小的账号优先使用',
       billingRateMultiplier: '账号计费倍率',
       costMultiplier: '成本倍率',
+      probePenalty: {
+        title: '探针惩罚',
+        hint: '对经此 Claude 账号完成的按量请求设置最低扣费；正常短请求也适用。默认关闭。',
+        minimum: '请求最低扣费（$ 站内额度）',
+        downstream: '低于门槛时补差，并向下游返回计费等效 Token，原始用量另行保留。下游按自己的价卡收费；相同价卡和倍率下仅有不足一个输出 Token 单价的取整差额。',
+        invalid: '请输入 0 到 1000 之间、最多 8 位小数的金额；启用时必须大于 0。',
+        adjustment: '探针惩罚补差',
+      },
       costMultiplierHint: '默认 0.1，跟随上游自动更新，关闭后可手填实际成本，不影响账单。',
       costMultiplierAutoSync: '跟随上游',
       costMultiplierInvalid: '成本倍率必须是 0 到 1000000 之间的有效数字。',
@@ -2089,9 +2173,9 @@ export default {
         question: '题目',
         candyQuestion: '糖果逻辑测试',
         pelicanQuestion: '鹈鹕骑自行车（HTML）',
-        stateProbeQuestion: '质量检测（几秒判满血/降智）',
-        stateProbeHint: '不发题目：每次执行一次质量检测，结果记为满血 / 降智 / 无法判断。只适用于 OpenAI 订阅（OAuth）账号；同一账号同一时刻只跑一次，并行固定为 1。',
-        stateProbeBadge: '质量检测',
+        stateProbeQuestion: '探针测试（几秒判满血/降智）',
+        stateProbeHint: '不发题目：每次执行一次探针测试，结果记为满血 / 降智 / 无法判断。只适用于 OpenAI 订阅（OAuth）账号；同一账号同一时刻只跑一次，并行固定为 1。',
+        stateProbeBadge: '探针测试',
         candyHint: '原题标准答案为 21；展示本次回答供比较，不据此判断账号永久降智。',
 
         recordCount: '共 {count} 条记录',
@@ -2152,16 +2236,16 @@ export default {
         emptyResponse: '模型返回为空',
         invalidHtml: '模型没有返回可展示的独立 HTML',
         modeQuestion: '题目测试',
-        modeProbe: '质量检测',
+        modeProbe: '探针测试',
         probe: {
           intro: '只发两句极短的请求，几秒出结论：先裸发打一张门票，再带这张票续接一发，上游回了新门票就判为降智。',
-          scheduleHint: '想定时自动跑：切到「题目测试」→「定时测试」→「添加计划」，题目选「质量检测」。',
-          unsupported: '质量检测只适用于 OpenAI 订阅（OAuth）账号，当前账号请用题目测试。',
+          scheduleHint: '想定时自动跑：切到「题目测试」→「定时测试」→「添加计划」，题目选「探针测试」。',
+          unsupported: '探针测试只适用于 OpenAI 订阅（OAuth）账号，当前账号请用题目测试。',
           modelHint: '默认 gpt-6-astra，会按账号的模型映射转换；免费号不支持该模型时会提示「模型不支持」。',
-          start: '开始质量检测',
+          start: '开始探针测试',
           probing: '探测中...',
           running: '正在探测，通常几秒内完成，最长约 90 秒',
-          empty: '点击「开始质量检测」，结果会显示在这里。',
+          empty: '点击「开始探针测试」，结果会显示在这里。',
           verdictHealthy: '满血',
           verdictDegraded: '降智',
           verdictInconclusive: '无法判断',
@@ -2179,7 +2263,7 @@ export default {
           latency: '耗时',
           finishedAt: '完成时间',
           limitation: '判据只看门票头（x-codex-turn-state），不看回报的模型名——降到 luna 时它仍会显示 astra。单次结果受当次上游波动影响，建议结合多次结果或题目测试一起看。',
-          requestFailed: '质量检测请求失败',
+          requestFailed: '探针测试请求失败',
           failures: {
             unsupported: '账号不适用',
             account_error: '账号认证异常',

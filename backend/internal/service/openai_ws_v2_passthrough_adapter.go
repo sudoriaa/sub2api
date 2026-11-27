@@ -15,6 +15,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requestmodel"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/upstreamroute"
 	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
@@ -844,7 +845,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			firstClientMessage = aliasedBody
 		}
 	}
-	accountScopedFirst, scopeErr := s.applyCodexAccountIdentityOrHarvestPinRaw(ctx, account, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c), capturedSessionModel, firstClientMessage)
+	accountScopedFirst, scopeErr := s.applyCodexAccountIdentityOrHarvestPinRaw(ctx, account, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c), capturedSessionModel, firstClientMessage, codexClientSessionID(c))
 	if scopeErr != nil {
 		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket identity metadata", scopeErr)
 	}
@@ -1104,6 +1105,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
 				return payload, nil, nil
 			}
+			// passthrough 原样转发 session.update 等所有客户端事件；任何帧内的重复
+			// 字段都会让网关（gjson 取首个、sjson 只改首个）与上游读到不同的值
+			// （GHSA-p3r4-jcm3-2hph），在读取任何字段之前拒绝。
+			if field, conflict := requestmodel.ConflictingField("application/json", payload); conflict {
+				return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, fmt.Sprintf("websocket request payload declares field %.64q more than once", field), nil)
+			}
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 			isResponseCreate := eventType == "response.create"
 			responseCreateAt := time.Time{}
@@ -1180,7 +1187,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				if mapped := strings.TrimSpace(gjson.GetBytes(payload, "model").String()); mapped != "" {
 					identityModel = mapped
 				}
-				accountScopedPayload, scopeErr := s.applyCodexAccountIdentityOrHarvestPinRaw(ctx, account, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c), identityModel, payload)
+				accountScopedPayload, scopeErr := s.applyCodexAccountIdentityOrHarvestPinRaw(ctx, account, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c), identityModel, payload, codexClientSessionID(c))
 				if scopeErr != nil {
 					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket identity metadata", scopeErr)
 				}
@@ -1447,6 +1454,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		firstTurnStartedAt = hooks.InitialTurnStartedAt
 	}
 	failureAccountSideEffectsApplied := false
+	var modelUnavailable atomic.Bool
 	relayResult, relayExit := openaiwsv2.RunEntry(openaiwsv2.EntryInput{
 		Ctx:                ctx,
 		ClientConn:         policyClientConn,
@@ -1576,7 +1584,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					turnResult.Usage.CacheReadInputTokens,
 				)
 				if hooks != nil && hooks.AfterTurn != nil {
-					hooks.AfterTurn(turnNo, turnResult, nil)
+					var turnErr error
+					if modelUnavailable.Load() {
+						turnErr = ErrOpenAIWSModelUnavailable
+						turnResult.ObservedUsageOnError = true
+					}
+					hooks.AfterTurn(turnNo, turnResult, turnErr)
 				}
 			},
 			BeforeClientWrite: func(msgType coderws.MessageType, payload []byte) {
@@ -1587,10 +1600,14 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			AfterClientWrite: func(msgType coderws.MessageType, payload []byte, writeErr error) {
 				if msgType == coderws.MessageText && writeErr == nil {
 					eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
-					markOpenAIWSClientVisibleFailure(c, eventType, payload)
+					markOpenAIWSClientVisibleFailure(c, eventType, payload, &OpsUpstreamWSFailure{Phase: "upstream_event"})
 				}
 				if msgType == coderws.MessageText && openAIWSPassthroughIsTerminalOutput(payload) {
 					turnLifecycle.finishTerminalWrite(writeErr == nil, clientFrameConn.markTurnCompleted)
+				}
+				if writeErr == nil && modelUnavailable.Load() {
+					_ = clientConn.Close(coderws.StatusTryAgainLater, "model unavailable on this account; reconnect with complete context")
+					_ = clientConn.CloseNow()
 				}
 			},
 			BeforeRelayCancel: func(exit openaiwsv2.RelayExit) {
@@ -1617,6 +1634,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				regionalMeterObserveUsage(ctx, payload, eventType)
 				if eventType == "response.created" {
 					failureAccountSideEffectsApplied = false
+				}
+				if openAIWSModelFailureStatus(account, payload) != 0 {
+					modelUnavailable.Store(true)
 				}
 				if (eventType == "error" || eventType == "response.failed") && markOpenAIWSV2PassthroughCyberPolicy(c, payload) {
 					return nil
@@ -1667,6 +1687,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			},
 		},
 	})
+	if modelUnavailable.Load() {
+		if turn := activeTurn.Swap(0); turn != 0 && hooks != nil && hooks.AfterTurn != nil {
+			hooks.AfterTurn(int(turn), nil, ErrOpenAIWSModelUnavailable)
+		}
+		return NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater,
+			"model unavailable on this account; reconnect with complete context", ErrOpenAIWSModelUnavailable)
+	}
 	// Relay has joined both directions. Only this unfinished turn may settle
 	// here: completed terminal callbacks already consumed activeTurn. Never use
 	// relayResult.Usage, which aggregates earlier completed turns.
@@ -1778,6 +1805,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		turnCount,
 	)
 
+	// The relay has joined both directions; snapshot the real upstream close
+	// before handler cleanup or generic client-request classification loses it.
+	if relayExit.Stage == "read_upstream" && activeTurn.Load() != 0 {
+		markOpenAIWSUpstreamClose(c, relayExit.Err)
+	}
 	relayErr := relayExit.Err
 	var firstOutputTimeoutErr *openAIWSPassthroughFirstOutputTimeoutError
 	if errors.As(relayErr, &firstOutputTimeoutErr) {
@@ -1942,10 +1974,7 @@ func openaiwsv2RelayMessageTypeName(msgType coderws.MessageType) string {
 }
 
 func relayErrorText(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
+	return openaiwsv2.ErrorStringForLog(err)
 }
 
 func openAIWSFirstTokenMsForLog(firstTokenMs *int) int {

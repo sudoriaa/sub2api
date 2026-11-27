@@ -12,9 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -294,17 +296,20 @@ func extractSystemPreviewFromBody(body []byte) string {
 
 	switch {
 	case sys.IsArray():
-		for _, item := range sys.Array() {
+		var preview string
+		sys.ForEach(func(_, item gjson.Result) bool {
 			if !item.IsObject() {
-				continue
+				return true
 			}
 			if strings.EqualFold(item.Get("type").String(), "text") {
 				if t := item.Get("text").String(); strings.TrimSpace(t) != "" {
-					return t
+					preview = t
+					return false
 				}
 			}
-		}
-		return ""
+			return true
+		})
+		return preview
 	case sys.Type == gjson.String:
 		return sys.String()
 	default:
@@ -341,7 +346,7 @@ func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account,
 
 	h := make([]string, 0, len(interesting))
 	for _, k := range interesting {
-		if v := req.Header.Get(k); v != "" {
+		if v := getHeaderRaw(req.Header, k); v != "" {
 			h = append(h, fmt.Sprintf("%s=%q", k, safeHeaderValueForLog(k, v)))
 		}
 	}
@@ -376,6 +381,64 @@ func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account,
 	)
 }
 
+// claudeMimicDebugLine defers building the diagnostics line until an error
+// path actually needs it. The line is read only on Claude Code credential-scope
+// errors, so building it eagerly cost every OAuth request a header walk, a
+// system-prompt scan and several fmt.Sprintf calls for nothing.
+type claudeMimicDebugLine struct {
+	once            sync.Once
+	req             *http.Request
+	body            []byte
+	account         *Account
+	tokenType       string
+	mimicClaudeCode bool
+	line            string
+}
+
+func newClaudeMimicDebugLine(req *http.Request, body []byte, account *Account, tokenType string, mimicClaudeCode bool) *claudeMimicDebugLine {
+	return &claudeMimicDebugLine{
+		req:             req,
+		body:            body,
+		account:         account,
+		tokenType:       tokenType,
+		mimicClaudeCode: mimicClaudeCode,
+	}
+}
+
+func (l *claudeMimicDebugLine) String() string {
+	if l == nil {
+		return ""
+	}
+	l.once.Do(func() {
+		l.line = buildClaudeMimicDebugLine(l.req, l.body, l.account, l.tokenType, l.mimicClaudeCode)
+		// Drop references so the request/body are not retained after use.
+		l.req, l.body, l.account = nil, nil, nil
+	})
+	return l.line
+}
+
+// claudeMimicDebugLineFromContext returns the stored diagnostics line, building
+// it on first use. It also accepts a plain string for compatibility.
+func claudeMimicDebugLineFromContext(c interface {
+	Get(string) (any, bool)
+}) string {
+	if c == nil {
+		return ""
+	}
+	v, ok := c.Get(claudeMimicDebugInfoKey)
+	if !ok {
+		return ""
+	}
+	switch line := v.(type) {
+	case *claudeMimicDebugLine:
+		return line.String()
+	case string:
+		return line
+	default:
+		return ""
+	}
+}
+
 func logClaudeMimicDebug(req *http.Request, body []byte, account *Account, tokenType string, mimicClaudeCode bool) {
 	line := buildClaudeMimicDebugLine(req, body, account, tokenType, mimicClaudeCode)
 	if line == "" {
@@ -393,10 +456,7 @@ func isClaudeCodeCredentialScopeError(msg string) bool {
 		strings.Contains(m, "cannot be used for other api requests")
 }
 
-// sseDataRe matches SSE data lines with optional whitespace after colon.
-// Some upstream APIs return non-standard "data:" without space (should be "data: ").
 var (
-	sseDataRe            = regexp.MustCompile(`^data:\s*`)
 	claudeCliUserAgentRe = regexp.MustCompile(`(?i)^claude-cli/\d+\.\d+\.\d+`)
 
 	// claudeCodePromptPrefixes 用于检测 Claude Code 系统提示词的前缀列表
@@ -570,6 +630,9 @@ func shouldClearStickySession(account *Account, requestedModel string) bool {
 	if account == nil {
 		return false
 	}
+	if account.IsGateway() && account.gatewayMessagesView != nil {
+		account = account.gatewayMessagesView
+	}
 	if !account.IsSchedulable() {
 		return true
 	}
@@ -620,6 +683,11 @@ type ClaudeUsage struct {
 	CacheCreation5mTokens    int // 5分钟缓存创建token（来自嵌套 cache_creation 对象）
 	CacheCreation1hTokens    int // 1小时缓存创建token（来自嵌套 cache_creation 对象）
 	ImageOutputTokens        int `json:"image_output_tokens,omitempty"`
+
+	cacheCreationInputTokensPresent     bool
+	cacheCreationInputTokensFromDetails bool
+	promptTotalTokens                   int
+	promptTotalPresent                  bool
 }
 
 // ForwardResult 转发结果
@@ -629,7 +697,10 @@ type AudioUsage struct {
 }
 
 type ForwardResult struct {
-	RequestID string
+	// Only a successfully completed Claude response can receive the opt-in floor.
+	ProbePenaltyEligible bool
+	ProbePenalty         *ProbePenaltyReceipt
+	RequestID            string
 	// UpstreamHeaders 是直接上游的响应头，用于按账户配置解析上游请求标识。
 	UpstreamHeaders http.Header
 	Usage           ClaudeUsage
@@ -656,6 +727,9 @@ type ForwardResult struct {
 	// lowers it to UpstreamResponseServiceTier when the upstream reports a
 	// cheaper tier (see ResolveBillingServiceTier).
 	ServiceTier *string
+	// RequestedCacheTTL 记录客户端请求里的缓存 TTL（"5m" / "1h"），仅在账号开启
+	// cache_ttl_billing_from_request 时由 Forward 填写，供计费按请求档位归类缓存写入。
+	RequestedCacheTTL string
 
 	// 图片生成计费字段（图片生成模型使用）
 	ImageCount int // 生成的图片数量
@@ -678,6 +752,17 @@ type ForwardResult struct {
 	// claudeCodeMimic 记录 Anthropic API Key「模拟 Claude Code」在 system 前补的身份句，
 	// 记账时从用量里扣回（见 deductClaudeCodeMimicUsage）。
 	claudeCodeMimic claudeCodeMimicInjection
+	// UpstreamPriceMultiplier 是上游按实际请求端点计价相对计费模型价格的倍数（见 VertexUpstreamPriceMultiplier），
+	// 只作用于 token 费用；0 按 1 处理。
+	UpstreamPriceMultiplier float64
+}
+
+// upstreamPriceFactor 返回 UpstreamPriceMultiplier，未设置时为 1。
+func (r *ForwardResult) upstreamPriceFactor() float64 {
+	if r == nil || r.UpstreamPriceMultiplier <= 0 {
+		return 1
+	}
+	return r.UpstreamPriceMultiplier
 }
 
 // GatewayFailureStage identifies which request stage failed. The zero value is
@@ -715,16 +800,18 @@ type GatewayFailureReason string
 // trigger account failover. Additive metadata keeps existing composite literals
 // source-compatible and preserves their legacy retry-next-account behavior.
 type UpstreamFailoverError struct {
-	StatusCode               int
-	ResponseBody             []byte        // 上游响应体，用于错误透传规则匹配
-	ResponseHeaders          http.Header   // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
-	ForceCacheBilling        bool          // Antigravity 粘性会话切换时设为 true
-	RetryableOnSameAccount   bool          // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
-	SameAccountRetryDelay    time.Duration // 同账号重试的最小间隔；零值使用 handler 默认值
-	SameAccountRetryDeadline time.Time     // 同账号重试截止时间；零值表示仅受 retryLimit 限制
-	SameAccountRetryMax      int           // 可选的错误级同账号重试上限，低于 handler 默认预算时优先采用
-	RequestScopedTransient   bool          // 故障因素与账号无关（如上游按客户端身份/模型容量降载）：可同账号重试，但不得据此对账号做临时封禁
-	SafeToFailoverAfterWrite bool          // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
+	// QuotaRejectedBeforeExecution is set after any provisional tool receipts are restored.
+	QuotaRejectedBeforeExecution bool
+	StatusCode                   int
+	ResponseBody                 []byte        // 上游响应体，用于错误透传规则匹配
+	ResponseHeaders              http.Header   // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
+	ForceCacheBilling            bool          // Antigravity 粘性会话切换时设为 true
+	RetryableOnSameAccount       bool          // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
+	SameAccountRetryDelay        time.Duration // 同账号重试的最小间隔；零值使用 handler 默认值
+	SameAccountRetryDeadline     time.Time     // 同账号重试截止时间；零值表示仅受 retryLimit 限制
+	SameAccountRetryMax          int           // 可选的错误级同账号重试上限，低于 handler 默认预算时优先采用
+	RequestScopedTransient       bool          // 故障因素与账号无关（如上游按客户端身份/模型容量降载）：可同账号重试，但不得据此对账号做临时封禁
+	SafeToFailoverAfterWrite     bool          // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
 	// HeaderTimeoutSubmitted marks a failover caused by an OpenAI response-header
 	// timeout after the request was written. The upstream may have billed the
 	// attempt; the successful usage record adds one retry surcharge unit.
@@ -736,6 +823,7 @@ type UpstreamFailoverError struct {
 	NextAccountAction        NextAccountAction
 	ClientStatusCode         int
 	ClientMessage            string
+	StreamFailedFrame        *OpenAIStreamFailedFrame // 触发本次 failover 的流内 failed/error 帧；耗尽时用于错误透传规则匹配
 }
 
 func (e *UpstreamFailoverError) Error() string {
@@ -749,9 +837,21 @@ func (e *UpstreamFailoverError) ShouldRetryNextAccount() bool {
 	return e != nil && e.NextAccountAction != NextAccountStop
 }
 
+// SameAccountRetryOnly separates retry affinity from account-health scope.
+// An ambiguous Grok 403 is request-scoped too, but has its own one-backup budget.
+func (e *UpstreamFailoverError) SameAccountRetryOnly() bool {
+	return e != nil && e.RequestScopedTransient && e.Scope == GatewayFailureScopeRequest && e.Reason != GrokUnknownForbiddenReason
+}
+
 func (e *UpstreamFailoverError) IsCredentialFailure() bool {
 	return e != nil && e.Stage == GatewayFailureStageAccountAuth
 }
+
+// ErrOpenAIWSModelUnavailable preserves model-scoped failures through stream
+// and WebSocket close wrappers without charging other models' account health.
+var ErrOpenAIWSModelUnavailable = errors.New("upstream websocket model unavailable")
+
+const OpenAIWSModelUnavailableReason GatewayFailureReason = "openai_ws_model_unavailable"
 
 // ShouldReportAccountScheduleFailure prevents provider- and request-scoped
 // credential failures from being misattributed to the selected account. Legacy
@@ -759,7 +859,10 @@ func (e *UpstreamFailoverError) IsCredentialFailure() bool {
 // except an Excel BPS 429, which only cools the account's BPS route, and a
 // local BPS image admission rejection, which never reached the upstream.
 func (e *UpstreamFailoverError) ShouldReportAccountScheduleFailure() bool {
-	if e == nil || e.Reason == OpenAIUpstreamAdmissionPausedReason || e.Reason == ExcelBPSRateLimitedReason || e.Reason == GrokUnknownForbiddenReason || e.IsExcelBPSImageAdmissionRejection() {
+	if e == nil || e.Reason == OpenAIUpstreamAdmissionPausedReason || e.Reason == OpenAIWSModelUnavailableReason || e.Reason == ExcelBPSRateLimitedReason || e.Reason == GrokUnknownForbiddenReason || e.IsExcelBPSImageAdmissionRejection() {
+		return false
+	}
+	if e.RequestScopedTransient && e.Scope == GatewayFailureScopeRequest {
 		return false
 	}
 	return !e.IsCredentialFailure() || e.Scope == GatewayFailureScopeAccount
@@ -1374,7 +1477,7 @@ func (s *GatewayService) DoGrokNativeResponsesJSON(ctx context.Context, account 
 			}
 		}
 	}
-	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
+	upstreamReq, err := http.NewRequestWithContext(withOAuth429WireBody(ctx, body), http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build grok responses request: %w", err)
 	}
@@ -1383,7 +1486,7 @@ func (s *GatewayService) DoGrokNativeResponsesJSON(ctx context.Context, account 
 	upstreamReq.Header.Set("Accept", "application/json")
 	upstreamReq.Header.Set("User-Agent", defaultGrokUpstreamUserAgent())
 	applyGrokCLIHeaders(upstreamReq.Header)
-	account.ApplyHeaderOverrides(upstreamReq.Header)
+	account.ApplyHeaderOverridesWithContext(upstreamReq.Context(), upstreamReq.Header)
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
@@ -1428,6 +1531,21 @@ func mixedListingModelAllowed(groupPlatform, model string) bool {
 }
 
 func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64, platform string) []string {
+	legacy := s.cachedAvailableModels(ctx, groupID, platform)
+	catalog, err := s.readGatewayModelCatalog(ctx, groupID, platform)
+	if err != nil {
+		return legacy
+	}
+	models := catalog.directModels(platform)
+	if len(models) == 0 {
+		return legacy
+	}
+	combined := append(slices.Clone(legacy), models...)
+	slices.Sort(combined)
+	return slices.Compact(combined)
+}
+
+func (s *GatewayService) cachedAvailableModels(ctx context.Context, groupID *int64, platform string) []string {
 	cacheKey := modelsListCacheKey(groupID, platform)
 	if s.modelsListCache != nil {
 		if cached, found := s.modelsListCache.Get(cacheKey); found {
@@ -1482,17 +1600,13 @@ func availableModelsFromAccounts(accounts []Account, groupID *int64, platform st
 	hasInitialSelection := false
 
 	for _, acc := range accounts {
-		// Passthrough routing accepts models independently of model_mapping, so a
-		// stale mapping on a passthrough account must not narrow the public list.
-		// Treat it like an unmapped account: skip its mapping here and let
-		// supplementUnmappedOpenAIModels contribute the default set. Mappings on
-		// the ordinary accounts in the same group still count.
+
 		mapping := acc.GetModelMapping()
 		if acc.hasOAuthInitialModelSelection() {
 			hasInitialSelection = true
 			hasAnyMapping = true // an empty selection is an authoritative empty catalog
 		}
-		if platform == PlatformOpenAI && acc.IsOpenAIPassthroughEnabled() && !acc.hasOAuthInitialModelSelection() {
+		if platform == PlatformOpenAI && acc.IsOpenAIPassthroughEnabled() && !acc.IsOpenAIPassthroughModelFilterEnabled() && !acc.hasOAuthInitialModelSelection() {
 			mapping = nil
 		}
 		for model := range mapping {

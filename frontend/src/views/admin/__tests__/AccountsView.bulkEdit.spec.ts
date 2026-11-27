@@ -119,13 +119,14 @@ const AccountBulkActionsBarStub = {
 }
 
 const PaginationStub = {
+  props: ['total'],
   emits: ['update:page'],
   template: '<button data-test="next-page" @click="$emit(\'update:page\', 2)">next</button>'
 }
 
 const BulkEditAccountModalStub = {
-  props: ['show', 'target'],
-  template: '<div data-test="bulk-edit-modal" :data-show="String(show)" :data-target-mode="target?.mode ?? \'\'" :data-target-ids="JSON.stringify(target?.accountIds ?? [])"></div>'
+  props: ['show', 'target', 'filteredPreview'],
+  template: '<div data-test="bulk-edit-modal" :data-show="String(show)" :data-target-mode="target?.mode ?? \'\'" :data-filter-preview="String(filteredPreview)" :data-target-ids="JSON.stringify(target?.accountIds ?? [])"></div>'
 }
 
 const makeProbeAccount = (id: number, rate = 0.25) => ({
@@ -283,6 +284,50 @@ describe('admin AccountsView bulk edit scope', () => {
     }
   })
 
+  it.each([
+    { label: 'error with a future rate limit', update: { status: 'error' }, keep: true },
+    { label: 'temporary block with a future rate limit', update: { temp_unschedulable_until: '2099-01-01T00:00:00Z' }, keep: true },
+    { label: 'disabled with a future rate limit', update: { status: 'disabled', schedulable: false }, keep: true },
+    { label: 'expired rate limit', update: { rate_limit_reset_at: '2000-01-01T00:00:00Z' }, keep: false },
+    { label: 'cleared rate limit', update: { rate_limit_reset_at: null }, keep: false },
+    { label: 'different platform', update: { platform: 'gemini' }, keep: false },
+    { label: 'different type', update: { type: 'apikey' }, keep: false },
+    { label: 'different group', update: { group_ids: [20] }, keep: false },
+    { label: 'different privacy mode', update: { extra: { privacy_mode: 'failed' } }, keep: false },
+    { label: 'different name', update: { name: 'other-account' }, keep: false }
+  ])('preserves rate-limit filter scope after editing: $label', async ({ update, keep }) => {
+    vi.useFakeTimers()
+    const filters = { platform: 'openai', type: 'oauth', status: 'rate_limited', group: '10', privacy_mode: 'training_off', search: 'account-7' }
+    localStorage.setItem('account-filter-values', JSON.stringify(filters))
+    const row = {
+      ...makeProbeAccount(7), type: 'oauth', group_ids: [10],
+      extra: { privacy_mode: 'training_off' }, rate_limit_reset_at: '2099-01-01T00:00:00Z'
+    }
+    listAccounts.mockResolvedValue({ ...probePage([7]), items: [row] })
+    const wrapper = mountProbeView()
+    try {
+      await flushPromises()
+      const filterComponent = wrapper.findComponent({ name: 'AccountTableFilters' })
+      filterComponent.vm.$emit('update:filters', filters)
+      filterComponent.vm.$emit('change')
+      await vi.advanceTimersByTimeAsync(301)
+      await flushPromises()
+      expect(listAccounts).toHaveBeenCalledWith(1, 20, expect.objectContaining(filters), expect.anything())
+      expect(wrapper.find('[data-account-id="7"]').exists()).toBe(true)
+
+      wrapper.findComponent({ name: 'EditAccountModal' }).vm.$emit('updated', { ...row, ...update })
+      await flushPromises()
+
+      expect(wrapper.find('[data-account-id="7"]').exists()).toBe(keep)
+      expect(wrapper.findComponent(PaginationStub).exists()).toBe(keep)
+      if (keep) expect(wrapper.findComponent(PaginationStub).props('total')).toBe(1)
+      expect(listAccounts).toHaveBeenCalledTimes(2)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
   it('freezes filtered results as explicit IDs before opening bulk edit', async () => {
     listAccounts.mockResolvedValue(probePage([7, 11]))
     const wrapper = mount(AccountsView, {
@@ -328,7 +373,26 @@ describe('admin AccountsView bulk edit scope', () => {
 
     expect(wrapper.get('[data-test="bulk-edit-modal"]').attributes('data-show')).toBe('true')
     expect(wrapper.get('[data-test="bulk-edit-modal"]').attributes('data-target-mode')).toBe('selected')
+    expect(wrapper.get('[data-test="bulk-edit-modal"]').attributes('data-filter-preview')).toBe('true')
     expect(wrapper.get('[data-test="bulk-edit-modal"]').attributes('data-target-ids')).toBe('[7,11]')
+  })
+
+  it('passes only the explicitly checked IDs across pages to the upstream action', async () => {
+    listAccounts.mockImplementation(async (page: number) =>
+      page === 2 ? probePage([21, 22], 22, 2) : probePage([7, 8], 22, 1))
+    const wrapper = mountProbeView({ BulkEditAccountModal: BulkEditAccountModalStub })
+    await flushPromises()
+    await wrapper.get('[data-account-id="7"] [data-test="select-row"] input').trigger('change')
+    await wrapper.get('[data-test="next-page"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-account-id="22"] [data-test="select-row"] input').trigger('change')
+    await wrapper.get('[data-test="edit-filtered"]').trigger('click')
+    const modal = wrapper.get('[data-test="bulk-edit-modal"]')
+    expect(modal.attributes('data-filter-preview')).toBe('false')
+    expect(modal.attributes('data-target-ids')).toBe('[7,22]')
+    await wrapper.get('[data-account-id="21"] [data-test="select-row"] input').trigger('change')
+    expect(modal.attributes('data-target-ids')).toBe('[7,22]')
+    wrapper.unmount()
   })
 
   it('keeps checked OAuth IDs when a stale filtered-edit action fires', async () => {

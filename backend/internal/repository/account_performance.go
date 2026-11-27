@@ -8,62 +8,68 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/upstreamstats"
-
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
+	"github.com/redis/go-redis/v9"
 )
 
-type accountPerformanceRepository struct{ db *sql.DB }
-
-func NewAccountPerformanceRepository(db *sql.DB) service.AccountPerformanceRepository {
-	return &accountPerformanceRepository{db: db}
+type accountPerformanceRepository struct {
+	db      *sql.DB
+	display *accountPerformanceDisplayCache
 }
 
-// Strict, completed instrumented requests only. Missing traces/ambiguous traces,
-// unsuccessful streams, media and unknown timings remain NULL, never zero.
-// The trace start is the actual event time, not the asynchronous usage insert.
-// Normalize Z and nanoseconds before jsonpath .datetime(): PostgreSQL 14-16
-// needs an explicit UTC offset; all supported versions accept microseconds.
+func NewAccountPerformanceRepository(db *sql.DB, rdb *redis.Client, cfg *config.Config) service.AccountPerformanceRepository {
+	r := &accountPerformanceRepository{db: db}
+	r.display = newAccountPerformanceDisplayCache(rdb, cfg.Database.DBName, func(ctx context.Context, ids []int64, minutes int, now time.Time) (map[int64]service.AccountPerformance, error) {
+		tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		if _, err = tx.ExecContext(ctx, `SET LOCAL statement_timeout='4500ms'; SET LOCAL lock_timeout='500ms'; SET LOCAL work_mem='8MB'; SET LOCAL max_parallel_workers_per_gather=0`); err != nil {
+			return nil, err
+		}
+		metrics, err := readAccountPerformanceWindow(ctx, tx, ids, minutes, now)
+		if err != nil {
+			return nil, err
+		}
+		if err = tx.Commit(); err != nil {
+			return nil, err
+		}
+		return metrics, nil
+	})
+	return r
+}
+
+func (r *accountPerformanceRepository) Stop() {
+	if r.display != nil {
+		r.display.stop()
+	}
+}
+
+// Score billed text usage in the selected window. Quality rounds use their
+// own completion evidence; a latency sample does not establish stream success.
 const performanceMetricsSQL = `
-WITH source AS (
- SELECT u.*, t.detail,
-  (jsonb_path_query_first_tz(jsonb_build_object('at',
-   regexp_replace(regexp_replace(t.detail->>'started_at','Z$','+00:00'),
-    '(\.[0-9]{6})[0-9]+([+-])','\1\2')),
-   '$.at.datetime()', '{}',true)#>>'{}')::timestamptz AS event_at
- FROM usage_logs u
- JOIN LATERAL (
-  SELECT (array_agg(detail))[1] AS detail FROM (
-   SELECT detail FROM request_timing_details WHERE usage_log_id=u.id LIMIT 2
-  ) bounded_traces HAVING COUNT(*)=1
- ) t ON true
- -- Successful usage is timestamped at completion, never before trace start.
- -- Reuses idx_usage_logs_account_created_at before joining timing evidence.
- WHERE u.account_id=ANY($1) AND u.created_at >= $2
-), successful AS (
- SELECT * FROM source
- WHERE event_at >= $2 AND event_at <= $3
- AND detail->>'version'='1' AND detail->>'outcome'='success'
- AND detail->>'status'='200' AND detail->>'body_complete'='true'
- AND detail->>'canceled'='false' AND detail->>'truncated'='false'
- AND detail->>'client_disconnect'='false' AND detail->>'downstream_error'='false'
- AND (NOT stream OR detail->>'terminal'='completed')
- AND COALESCE(image_count,0)=0 AND COALESCE(image_output_tokens,0)=0 AND COALESCE(billing_mode,'token') NOT IN ('image','video')
-), usage AS (
+WITH usage AS (
  SELECT account_id,
- AVG(output_tokens*1000.0/NULLIF(duration_ms,0)) FILTER(WHERE output_tokens>=2 AND duration_ms>0) AS tps,
- COUNT(*) FILTER(WHERE output_tokens>=2 AND duration_ms>0) AS tps_n,
- AVG(first_token_ms) FILTER(WHERE stream AND first_token_ms>=0 AND first_token_ms<=duration_ms AND output_tokens>=2) AS ttft,
- COUNT(*) FILTER(WHERE stream AND first_token_ms>=0 AND first_token_ms<=duration_ms AND output_tokens>=2) AS ttft_n,
- AVG(100.0*cache_read_tokens/NULLIF(input_tokens::numeric+cache_read_tokens+cache_creation_tokens,0))
-  FILTER(WHERE input_tokens>=0 AND cache_read_tokens>=0 AND cache_creation_tokens>=0) AS cache_percent,
- COUNT(*) FILTER(WHERE input_tokens>=0 AND cache_read_tokens>=0 AND cache_creation_tokens>=0
-  AND input_tokens::numeric+cache_read_tokens+cache_creation_tokens>0) AS cache_n
- FROM successful GROUP BY account_id
+   AVG(output_tokens * 1000.0 / NULLIF(duration_ms, 0)) FILTER (WHERE output_tokens >= 2 AND duration_ms > 0) AS tps,
+   COUNT(*) FILTER (WHERE output_tokens >= 2 AND duration_ms > 0) AS tps_n,
+   AVG(first_token_ms) FILTER (WHERE stream AND output_tokens >= 2 AND first_token_ms BETWEEN 0 AND duration_ms) AS ttft,
+   COUNT(*) FILTER (WHERE stream AND output_tokens >= 2 AND first_token_ms BETWEEN 0 AND duration_ms) AS ttft_n,
+   AVG(100.0 * cache_read_tokens / NULLIF(input_tokens::numeric + cache_read_tokens + cache_creation_tokens, 0))
+     FILTER (WHERE input_tokens >= 0 AND cache_read_tokens >= 0 AND cache_creation_tokens >= 0) AS cache_percent,
+   COUNT(*) FILTER (WHERE input_tokens >= 0 AND cache_read_tokens >= 0 AND cache_creation_tokens >= 0
+     AND input_tokens::numeric + cache_read_tokens + cache_creation_tokens > 0) AS cache_n
+ FROM usage_logs
+ WHERE account_id = ANY($1) AND created_at >= $2 AND created_at <= $3
+   AND COALESCE(image_count, 0) = 0 AND COALESCE(image_output_tokens, 0) = 0
+   AND COALESCE(billing_mode, 'token') NOT IN ('image','video')
+ GROUP BY account_id
 ), rounds AS (
  SELECT p.account_id,p.id,r.quality_round_id,
- bool_or(r.quality_judgment->>'verdict'='incorrect' AND r.status='failed' AND r.error_message IN ('answer_mismatch','state_degraded')
+ bool_or(r.pelican_config @> '{"quality_429_streak":3,"quality_http_status":429}' OR r.quality_judgment->>'verdict'='incorrect' AND r.status='failed' AND r.error_message IN ('answer_mismatch','state_degraded')
     AND (COALESCE(r.pelican_config->>'question_kind','')<>'random_reasoning'
       OR r.pelican_config->'quality_batch'->>'decision'='peer_passed')) AS failed,
  bool_and(COALESCE(r.quality_judgment->>'verdict'='correct' AND r.status='success'
@@ -127,6 +133,11 @@ func readAccountPerformance(ctx context.Context, db sqlExecutor, ids []int64, no
 	if err != nil {
 		return nil, err
 	}
+	return readAccountPerformanceWindow(ctx, db, ids, minutes, now)
+}
+
+func readAccountPerformanceWindow(ctx context.Context, db sqlExecutor, ids []int64, minutes int, now time.Time) (map[int64]service.AccountPerformance, error) {
+	out := make(map[int64]service.AccountPerformance, len(ids))
 	since := now.Add(-time.Duration(minutes) * time.Minute)
 	rows, err := db.QueryContext(ctx, performanceMetricsSQL, pq.Array(ids), since, now)
 	if err != nil {
@@ -158,7 +169,10 @@ func readAccountPerformance(ctx context.Context, db sqlExecutor, ids []int64, no
 	return out, nil
 }
 func (r *accountPerformanceRepository) Read(ctx context.Context, ids []int64, now time.Time) (map[int64]service.AccountPerformance, error) {
-	return readAccountPerformance(ctx, r.db, ids, now)
+	if r.display == nil {
+		return readAccountPerformance(ctx, r.db, ids, now)
+	}
+	return r.readDisplay(ctx, ids, now)
 }
 func (r *accountPerformanceRepository) EnabledIDs(ctx context.Context) ([]int64, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT m.account_id FROM account_performance_monitors m JOIN accounts a ON a.id=m.account_id WHERE m.config->>'enabled'='true' AND NOT m.paused AND a.deleted_at IS NULL ORDER BY m.account_id`)

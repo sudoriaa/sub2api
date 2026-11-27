@@ -1690,11 +1690,14 @@ func TestOpenAIStreamingReadErrorBeforeOutputReturnsFailover(t *testing.T) {
 		Header:     http.Header{"X-Request-Id": []string{"rid-disconnect"}},
 	}
 
-	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI, Name: "acc"}, time.Now(), "model", "model")
+	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Name: "acc"}, time.Now(), "model", "model")
 	require.Error(t, err)
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.True(t, failoverErr.RequestScopedTransient)
+	require.Equal(t, GatewayFailureScopeRequest, failoverErr.Scope)
 	require.False(t, c.Writer.Written())
 	require.Empty(t, rec.Body.String())
 }
@@ -3213,6 +3216,28 @@ func TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesCompactPath(t *test
 	require.Empty(t, req.Header.Get("OpenAI-Beta"), "Codex OAuth HTTP must not synthesize the legacy responses beta header")
 	require.NotEmpty(t, req.Header.Get("Session_Id"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(req.Context()))
+}
+
+func TestOpenAIBuildersMarkCodexHTTPRequests(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &OpenAIGatewayService{cfg: &config.Config{}}
+	for _, typ := range []string{AccountTypeOAuth, AccountTypeSetupToken, AccountTypeAPIKey} {
+		t.Run(typ, func(t *testing.T) {
+			const token = "fixture"
+			body := []byte(`{"model":"gpt-5"}`)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+			account := &Account{Platform: PlatformOpenAI, Type: typ, Credentials: map[string]any{"chatgpt_account_id": "fixture"}}
+			native, err := svc.buildUpstreamRequest(c.Request.Context(), c, account, body, token, true, "", true)
+			require.NoError(t, err)
+			passthrough, err := svc.buildUpstreamRequestOpenAIPassthrough(c.Request.Context(), c, account, body, token)
+			require.NoError(t, err)
+			for _, req := range []*http.Request{native, passthrough} {
+				require.Equal(t, typ != AccountTypeAPIKey, IsOpenAICodexHTTPRequest(req.Context()))
+				require.Equal(t, typ != AccountTypeAPIKey, req.URL.String() == chatgptCodexURL)
+			}
+		})
+	}
 }
 
 func TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesExplicitAPIKeyBetaHeader(t *testing.T) {

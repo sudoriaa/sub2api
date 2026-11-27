@@ -3,6 +3,7 @@ package handler
 import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler/admin"
+	ratelimit "github.com/Wei-Shaw/sub2api/internal/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -44,7 +45,7 @@ func ProvideAdminHandlers(
 	pelicanGroupTestHandler *admin.PelicanGroupTestHandler,
 	controlledExperimentHandler *admin.ControlledExperimentHandler,
 	accountOpsHandler *admin.AccountOpsHandler,
-	accountTokenGuardHandler *admin.AccountTokenGuardHandler,
+	openAIReloginHandler *admin.OpenAIReloginHandler,
 	accountTokenGuardV2Handler *admin.AccountTokenGuardV2Handler,
 	channelHandler *admin.ChannelHandler,
 	channelMonitorHandler *admin.ChannelMonitorHandler,
@@ -59,7 +60,6 @@ func ProvideAdminHandlers(
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	opencodeGoUsage *service.OpenCodeGoUsageService,
 	settingService *service.SettingService,
-	codexHarvest *service.CodexHarvestService,
 	openAIGatewayService *service.OpenAIGatewayService,
 	autoCredit service.AutoCreditRepository,
 ) *AdminHandlers {
@@ -67,7 +67,6 @@ func ProvideAdminHandlers(
 	accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
 	accountHandler.SetCodexTicketSettings(settingService)
-	accountHandler.SetCodexHarvestService(codexHarvest)
 	accountHandler.SetOpenAIGatewayService(openAIGatewayService)
 	accountHandler.SetOpenCodeGoUsageService(opencodeGoUsage)
 	accountHandler.SetOpenAIOAuthReauthService(openaiOAuthReauthService)
@@ -101,7 +100,7 @@ func ProvideAdminHandlers(
 		Plugin:                 pluginHandler,
 		APIKey:                 apiKeyHandler,
 		AccountOps:             accountOpsHandler,
-		AccountTokenGuard:      accountTokenGuardHandler,
+		OpenAIRelogin:          openAIReloginHandler,
 		AccountTokenGuardV2:    accountTokenGuardV2Handler,
 		ScheduledTest:          scheduledTestHandler,
 		PelicanGroupTest:       pelicanGroupTestHandler,
@@ -217,6 +216,7 @@ func ProvideHandlers(
 	userHandler *UserHandler,
 	apiKeyHandler *APIKeyHandler,
 	usageHandler *UsageHandler,
+	usageRecordsHandler *UsageRecordsHandler,
 	redeemHandler *RedeemHandler,
 	subscriptionHandler *SubscriptionHandler,
 	announcementHandler *AnnouncementHandler,
@@ -248,6 +248,7 @@ func ProvideHandlers(
 		User:             userHandler,
 		APIKey:           apiKeyHandler,
 		Usage:            usageHandler,
+		UsageRecords:     usageRecordsHandler,
 		Redeem:           redeemHandler,
 		Subscription:     subscriptionHandler,
 		Announcement:     announcementHandler,
@@ -280,6 +281,8 @@ var ProviderSet = wire.NewSet(
 	NewUserHandler,
 	NewAPIKeyHandler,
 	NewUsageHandler,
+	ratelimit.NewRateLimiter,
+	NewUsageRecordsHandler,
 	NewRedeemHandler,
 	NewSubscriptionHandler,
 	NewAnnouncementHandler,
@@ -332,7 +335,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewPelicanGroupTestHandler,
 	admin.NewControlledExperimentHandler,
 	admin.NewAccountOpsHandler,
-	admin.NewAccountTokenGuardHandler,
+	admin.NewOpenAIReloginHandler,
 	admin.NewAccountTokenGuardV2Handler,
 	admin.ProvideMatureChannelHandler,
 	admin.NewChannelMonitorHandler,

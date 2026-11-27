@@ -150,7 +150,10 @@ func (s *OpenAIGatewayService) ForwardMiniMaxH3(ctx context.Context, c *gin.Cont
 		}
 		result.Model, result.BillingModel, result.UpstreamModel = info.Model, info.Model, account.GetMappedModel(info.Model)
 		if !strings.EqualFold(result.UpstreamModel, "MiniMax-H3") {
-			return nil, fmt.Errorf("this video relay only supports MiniMax-H3")
+			// Relay-specific video models require an explicit account mapping.
+			if _, configured := account.GetModelMapping()[info.Model]; !configured || strings.TrimSpace(result.UpstreamModel) == "" {
+				return nil, fmt.Errorf("MiniMax-H3 requires an explicit account model mapping for this model")
+			}
 		}
 		result.VideoResolution, result.VideoDurationSeconds = info.Resolution, info.DurationSeconds
 		body, err = sjson.SetBytes(body, "model", result.UpstreamModel)
@@ -169,7 +172,7 @@ func (s *OpenAIGatewayService) ForwardMiniMaxH3(ctx context.Context, c *gin.Cont
 	if err != nil {
 		return nil, err
 	}
-	account.ApplyHeaderOverrides(req.Header)
+	account.ApplyHeaderOverridesWithContext(req.Context(), req.Header)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
@@ -221,7 +224,9 @@ func (s *OpenAIGatewayService) ForwardMiniMaxH3(ctx context.Context, c *gin.Cont
 		}
 		result.ResponseID = MiniMaxH3TaskKey(id)
 	case MiniMaxH3EndpointStatus:
-		if gjson.GetBytes(responseBody, "status").String() == "completed" && validMiniMaxH3OutputURL(gjson.GetBytes(responseBody, "metadata.url").String()) {
+		if gjson.GetBytes(responseBody, "status").String() == "completed" &&
+			(validMiniMaxH3OutputURL(gjson.GetBytes(responseBody, "metadata.url").String()) ||
+				validMiniMaxH3OutputURL(gjson.GetBytes(responseBody, "url").String())) {
 			result.VideoCount = 1
 		}
 	}

@@ -10,6 +10,7 @@ import (
 )
 
 var ErrUsageBillingOutcomeUnknown = errors.New("usage billing outcome is unknown; durable state must be checked")
+var ErrUsageBillingJournalRetired = errors.New("legacy billing journal retired")
 var ErrUsageBillingEventVersion = errors.New("unsupported usage billing event version")
 
 type UsageBillingEventKey struct {
@@ -29,6 +30,9 @@ type UsageBillingRecovery struct {
 	Event      UsageBillingEvent
 	Result     UsageBillingApplyResult
 	NeedsCache bool
+	// Settled proves that this journal event committed its own canonical usage
+	// and effects. Applied describes whether this call performed those effects.
+	Settled bool
 }
 
 // Stage is a separate durable boundary before monetary execution. A crash after
@@ -38,6 +42,16 @@ type DurableUsageBillingRepository interface {
 	ApplyStagedUsageBilling(context.Context, UsageBillingEventKey) (*UsageBillingRecovery, error)
 	PendingUsageBilling(context.Context, int) ([]UsageBillingEventKey, error)
 	AcknowledgeUsageBillingCache(context.Context, UsageBillingEventKey) error
+}
+
+// UsageSettlementRepository uses the upstream claim and the usage ledger in a single transaction.
+type UsageSettlementRepository interface {
+	ApplyUsage(context.Context, *UsageBillingCommand, *UsageLog) (*UsageBillingRecovery, error)
+}
+
+type imageBillingStageRepository interface {
+	// True only if this call created the journal event and confirmed its commit.
+	StageUsageBillingForReceipt(context.Context, *UsageBillingCommand, *UsageLog) (bool, error)
 }
 
 func (s *GatewayService) DurableUsageBillingEnabled() bool {
@@ -92,32 +106,87 @@ func invalidateDurableUsageBilling(ctx context.Context, recovered *UsageBillingR
 }
 
 func applyDurableUsageBilling(ctx context.Context, repo DurableUsageBillingRepository, cmd *UsageBillingCommand, usage *UsageLog, p *postUsageBillingParams, deps *billingDeps) (bool, error) {
-	if err := repo.StageUsageBilling(ctx, cmd, usage); err != nil {
-		return false, err
-	}
+	receipt, _ := ctx.Value(imageBillingReceiptKey{}).(*ImageBillingReceipt)
+	var recovered *UsageBillingRecovery
+	var err error
+	var created bool
 	key := UsageBillingEventKey{RequestID: cmd.RequestID, APIKeyID: cmd.APIKeyID}
-	recovered, err := repo.ApplyStagedUsageBilling(ctx, key)
+	direct, upstream := repo.(UsageSettlementRepository)
+	if upstream {
+		recovered, err = direct.ApplyUsage(ctx, cmd, usage)
+		created = recovered != nil && recovered.Result.Applied
+	} else {
+		if stager, ok := repo.(imageBillingStageRepository); receipt != nil && ok {
+			created, err = stager.StageUsageBillingForReceipt(ctx, cmd, usage)
+		} else {
+			err = repo.StageUsageBilling(ctx, cmd, usage)
+		}
+		if err == nil {
+			recovered, err = repo.ApplyStagedUsageBilling(ctx, key)
+		}
+	}
 	if err != nil {
 		return false, err
 	}
-	auth, _ := p.APIKeyService.(APIKeyAuthCacheInvalidator)
-	if err := invalidateDurableUsageBilling(ctx, recovered, deps.billingCacheService, auth); err != nil {
-		// The committed canonical usage is already authoritative. Cache work
-		// stays pending for the recovery worker; never call legacy billing.
-		deferUsageBillingCache(repo, ctx, key)
-		return false, err
+	if target, ok := ctx.Value(probePenaltyResultKey{}).(*ForwardResult); ok && target != nil {
+		if recovered == nil || !recovered.Settled {
+			return false, ErrUsageBillingOutcomeUnknown
+		}
+		canonical := recovered.Event.Usage
+		target.ProbePenalty = nil
+		if canonical.CustomerCostDetails != nil {
+			target.ProbePenalty = canonical.CustomerCostDetails.ProbePenalty
+		}
+		target.Usage.InputTokens = canonical.InputTokens
+		target.Usage.OutputTokens = canonical.OutputTokens
+		target.Usage.CacheReadInputTokens = canonical.CacheReadTokens
+		target.Usage.CacheCreationInputTokens = canonical.CacheCreationTokens
 	}
-	if recovered != nil && recovered.NeedsCache {
-		if err := repo.AcknowledgeUsageBillingCache(ctx, key); err != nil {
+	if upstream {
+		if recovered != nil && recovered.Result.Applied {
+			finalizeCtx, cancel := detachedBillingContext(ctx)
+			defer cancel()
+			if recovered.Result.APIKeyQuotaExhausted && p.APIKey != nil {
+				if auth, ok := p.APIKeyService.(apiKeyAuthCacheInvalidator); ok {
+					auth.InvalidateAuthCacheByKey(finalizeCtx, p.APIKey.Key)
+				}
+			}
+			finalizePostUsageBilling(finalizeCtx, p, deps, &recovered.Result)
+		}
+	} else {
+		auth, _ := p.APIKeyService.(APIKeyAuthCacheInvalidator)
+		if err := invalidateDurableUsageBilling(ctx, recovered, deps.billingCacheService, auth); err != nil {
+			// The committed canonical usage is already authoritative. Cache work
+			// stays pending for the recovery worker; never call legacy billing.
+			deferUsageBillingCache(repo, ctx, key)
 			return false, err
 		}
+		if recovered != nil && recovered.NeedsCache {
+			if err := repo.AcknowledgeUsageBillingCache(ctx, key); err != nil {
+				return false, err
+			}
+		}
+		if deps.deferredService != nil && p.Account != nil {
+			deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)
+		}
+		if recovered != nil && recovered.Result.Applied && !p.SimpleModeKeyRateLimitOnly {
+			go notifyBalanceLow(p, deps, &recovered.Result)
+			go notifyAccountQuota(p, deps, &recovered.Result)
+		}
 	}
-	if deps.deferredService != nil && p.Account != nil {
-		deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)
-	}
-	if recovered != nil && recovered.Result.Applied && !p.SimpleModeKeyRateLimitOnly {
-		go notifyBalanceLow(p, deps, &recovered.Result)
-		go notifyAccountQuota(p, deps, &recovered.Result)
+	if recovered != nil && recovered.Settled && created && !p.SimpleModeKeyRateLimitOnly {
+		if receipt != nil {
+			canonical := recovered.Event.Usage
+			mode := ""
+			if canonical.BillingMode != nil {
+				mode = *canonical.BillingMode
+			}
+			*receipt = ImageBillingReceipt{Settled: true, ActualCost: canonical.ActualCost, BillingMode: mode, ImageCount: canonical.ImageCount}
+			if d := canonical.CustomerCostDetails; d != nil {
+				receipt.MinimumCharge = d.ImageMinimumCharge
+				receipt.MinimumChargeAdjustment = d.ImageMinimumChargeAdjustment
+			}
+		}
 	}
 	return recovered != nil && recovered.Result.Applied, nil
 }
@@ -139,7 +208,12 @@ func ProvideUsageRecordWorkerPool(cfg *config.Config, billing UsageBillingReposi
 		defer ticker.Stop()
 		for {
 			cycle, stop := context.WithTimeout(ctx, 5*time.Second)
-			if err := recoverUsageBillingBatch(cycle, repo, cache, auth); err != nil && ctx.Err() == nil {
+			err := recoverUsageBillingBatch(cycle, repo, cache, auth)
+			if errors.Is(err, ErrUsageBillingJournalRetired) {
+				stop()
+				return
+			}
+			if err != nil && ctx.Err() == nil {
 				logger.LegacyPrintf("usage_billing.recovery", "durable billing cycle incomplete: %v", err)
 			}
 			stop()
@@ -158,12 +232,18 @@ func recoverUsageBillingBatch(ctx context.Context, repo DurableUsageBillingRepos
 	if err != nil {
 		return err
 	}
+	apply := repo.ApplyStagedUsageBilling
+	if worker, ok := repo.(interface {
+		RecoverStagedUsageBilling(context.Context, UsageBillingEventKey) (*UsageBillingRecovery, error)
+	}); ok {
+		apply = worker.RecoverStagedUsageBilling
+	}
 	var failures error
 	for _, key := range keys {
 		if ctx.Err() != nil {
 			return errors.Join(failures, ctx.Err())
 		}
-		r, err := repo.ApplyStagedUsageBilling(ctx, key)
+		r, err := apply(ctx, key)
 		if err == nil {
 			err = invalidateDurableUsageBilling(ctx, r, cache, auth)
 		}

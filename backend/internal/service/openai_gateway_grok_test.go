@@ -1158,13 +1158,15 @@ func TestPrepareGrokImageEditNormalizesOfficialImageObjects(t *testing.T) {
 	}
 }
 
-func TestPrepareGrokImageEditRejectsMoreThanThreeSources(t *testing.T) {
-	body := []byte(`{"images":["https://example.com/1.png","https://example.com/2.png","https://example.com/3.png","https://example.com/4.png"]}`)
+func TestPrepareGrokImageEditRejectsMoreThanFiveSources(t *testing.T) {
+	body := []byte(`{"images":["https://example.com/1.png","https://example.com/2.png","https://example.com/3.png","https://example.com/4.png","https://example.com/5.png","https://example.com/6.png"]}`)
 
 	out, _, err := prepareGrokMediaForwardBody(GrokMediaEndpointImagesEdits, body, "application/json")
 	require.Error(t, err)
 	require.Nil(t, out)
-	require.Contains(t, err.Error(), "maximum of 3 source images")
+	var validationErr *GrokMediaInputValidationError
+	require.ErrorAs(t, err, &validationErr)
+	require.Contains(t, err.Error(), "maximum of 5 source images")
 }
 
 func TestNormalizeGrokMediaModelForEndpoint(t *testing.T) {
@@ -3796,6 +3798,50 @@ func TestFailoverOpenAIUpstreamHTTPErrorUsesOnlyGrokRateLimitPolicy(t *testing.T
 	require.NotNil(t, failoverErr)
 	require.Equal(t, 1, repo.rateLimitedCalls)
 	require.Zero(t, repo.tempUnschedCalls)
+}
+
+func TestSanitizeGrokReasoningNullContentPreservesRequestSemantics(t *testing.T) {
+	for _, tc := range []struct{ name, body, want string }{
+		{"absent", `{ "input": [{"text":"keep the spacing"}] }`, ""},
+		{"quoted", `{ "input": [{"text":"null","nullable":true}] }`, ""},
+		{"incidental suffix", `{ "input":{"text":"pull the full diff"} }`, ""},
+		{"outside input", `{ "metadata":null, "input":{"text":"ok"} }`, ""},
+		{"compaction", `{ "input":[{"type":"compaction","status":null}] }`, ""},
+		{"spaced null", "{\"input\":{\"items\":[null,0,false],\"drop\": \t\r\n null}}", `{"input":{"items":[null,0,false]}}`},
+		{"duplicate input", `{"input":{},"input":{"keep":1,"drop":null}}`, `{"input":{"keep":1}}`},
+		{"null after incidental suffix", `{"input":{"text":"full","drop":null}}`, `{"input":{"text":"full"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := sanitizeGrokReasoningNullContent([]byte(tc.body))
+			require.NoError(t, err)
+			if tc.want == "" {
+				require.Equal(t, tc.body, string(got))
+				return
+			}
+			require.JSONEq(t, tc.want, string(got))
+		})
+	}
+}
+
+func BenchmarkGrokReasoningNullContent(b *testing.B) {
+	history := strings.Repeat("synthetic history ", 60_000)
+	for _, tc := range []struct{ name, prefix, suffix string }{
+		{"Absent", "", `"}]}`},
+		{"Quoted", "", ` return null"}]}`},
+		{"Nested", "", `","metadata":{"drop":null}}]}`},
+		{"Incidental", "pull the full diff ", `"}]}`},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			body := []byte(`{"input":[{"role":"user","content":"` + tc.prefix + history + tc.suffix)
+			b.SetBytes(int64(len(body)))
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, err := sanitizeGrokReasoningNullContent(body); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }
 
 func TestPatchGrokResponsesBody_StripsReasoningContentNull(t *testing.T) {

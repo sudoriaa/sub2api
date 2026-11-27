@@ -4,6 +4,7 @@ import OpsErrorDetailModal from '../OpsErrorDetailModal.vue'
 import { observerUsageContext } from '@/components/admin/usage/observerUsageContext'
 
 const mocks = vi.hoisted(() => ({
+  copyToClipboard: vi.fn(),
   getRequestErrorDetail: vi.fn(),
   own: vi.fn(),
   listRequestErrorUpstreamErrors: vi.fn()
@@ -20,6 +21,10 @@ vi.mock('@/api/admin/ops', () => ({
 
 vi.mock('@/stores', () => ({
   useAppStore: () => ({ showError: vi.fn() })
+}))
+
+vi.mock('@/composables/useClipboard', () => ({
+  useClipboard: () => ({ copyToClipboard: mocks.copyToClipboard })
 }))
 
 vi.mock('vue-i18n', async (importOriginal) => {
@@ -78,6 +83,42 @@ describe('OpsErrorDetailModal', () => {
     expect(wrapper.text()).toContain('429')
     expect(wrapper.findAll('pre')).toHaveLength(2)
     expect(wrapper.text()).not.toContain('admin.ops.errorDetail.payloads.upstream_detail')
+    expect(wrapper.find('[data-testid="error-detail-reported-headers"]').exists()).toBe(false)
+  })
+
+  it('shows the identity headers that were reported upstream and copies them', async () => {
+    mocks.getRequestErrorDetail.mockResolvedValue({
+      id: 2,
+      created_at: '2026-11-24T00:00:00Z',
+      phase: 'upstream',
+      error_owner: 'provider',
+      status_code: 502,
+      platform: 'openai',
+      request_id: 'rid-2',
+      upstream_errors: JSON.stringify([
+        {
+          account_id: 5,
+          account_name: 'relay-a',
+          upstream_status_code: 400,
+          reported_headers: { 'x-gateway-user-id': '7' }
+        }
+      ])
+    })
+
+    const wrapper = shallowMount(OpsErrorDetailModal, {
+      props: { show: true, errorId: 2, errorType: 'request' },
+      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: true } }
+    })
+    await flushPromises()
+
+    const section = wrapper.get('[data-testid="error-detail-reported-headers"]')
+    expect(section.text()).toContain('relay-a')
+    expect(section.text()).toContain('x-gateway-user-id')
+    await section.get('button').trigger('click')
+    expect(mocks.copyToClipboard).toHaveBeenCalledWith(
+      'x-gateway-user-id: 7',
+      'admin.ops.errorDetail.reportedHeaders.copied'
+    )
   })
 })
 
@@ -130,5 +171,24 @@ it('labels HTTP 200 as wire status when the stream failed', async () => {
   expect(wrapper.text()).toContain('usage.errors.detail.clientHttpStatus')
   expect(wrapper.text()).toContain('usage.errors.detail.streamFailedAfterHeaders')
   expect(wrapper.text()).toContain('200')
+  wrapper.unmount()
+})
+
+it('shows value-free encrypted-history control diagnostics from the error body', async () => {
+  vi.clearAllMocks()
+  mocks.listRequestErrorUpstreamErrors.mockResolvedValue({ items: [] })
+  mocks.getRequestErrorDetail.mockResolvedValue({
+    id: 1, status_code: 409, phase: 'request', type: 'invalid_request_error',
+    message: 'Encrypted history recovery refused',
+    error_body: JSON.stringify({ error: { code: 'encrypted_agent_recovery_wire_changed', controls: { snapshot: 'oauth_replay', tools: 'changed', tool_choice: 'match', previous_response_id_present: false } } }),
+  })
+  const wrapper = shallowMount(OpsErrorDetailModal, {
+    props: { show: true, errorId: 1, errorType: 'request' },
+    global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: true } },
+  })
+  await flushPromises()
+  expect(wrapper.text()).toContain('"snapshot": "oauth_replay"')
+  expect(wrapper.text()).toContain('"tools": "changed"')
+  expect(wrapper.text()).toContain('"previous_response_id_present": false')
   wrapper.unmount()
 })

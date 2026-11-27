@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -423,6 +425,13 @@ func (s *defaultOpenAIAccountScheduler) Select(
 	req OpenAIAccountScheduleRequest,
 ) (selection *AccountSelectionResult, decision OpenAIAccountScheduleDecision, err error) {
 	recovery := openAIAgentRecoveryFromContext(ctx)
+	// Preserve the public refusal and admission policy, while allowing operators
+	// to identify the exact owner check without capturing conversation state.
+	ownerUnavailable := func(stage string, ownerID int64) error {
+		logger.FromContext(ctx).Warn("openai.agent_owner_selection_refused",
+			zap.String("stage", stage), zap.Int64("owner_account_id", ownerID))
+		return openAIAgentRecoveryError("owner_unavailable")
+	}
 	if recovery != nil && recovery.lookupErr != nil {
 		return nil, decision, recovery.lookupErr
 	}
@@ -432,7 +441,7 @@ func (s *defaultOpenAIAccountScheduler) Select(
 	if recovery != nil && recovery.owner != nil {
 		if req.Platform != PlatformOpenAI || req.SessionHash != recovery.session ||
 			derefGroupID(req.GroupID) != recovery.groupID || req.RequestedModel != recovery.model {
-			return nil, decision, openAIAgentRecoveryError("owner_unavailable")
+			return nil, decision, ownerUnavailable("request_scope", recovery.owner.accountID)
 		}
 	}
 	if recovery.ownerBindingRequired() {
@@ -449,7 +458,7 @@ func (s *defaultOpenAIAccountScheduler) Select(
 		var pointerErr error
 		pointerOwner, pointerErr = s.service.getOpenAIWSStateStore().GetResponseAccount(ctx, recovery.groupID, recovery.previousResponseID)
 		if pointerErr != nil || pointerOwner <= 0 || req.PreviousResponseID != recovery.previousResponseID {
-			return nil, decision, openAIAgentRecoveryError("owner_unavailable")
+			return nil, decision, ownerUnavailable("response_pointer", pointerOwner)
 		}
 		req.StickyAccountID = pointerOwner
 		req.StickyWeighted = false
@@ -551,7 +560,7 @@ func (s *defaultOpenAIAccountScheduler) Select(
 	if err := s.checkOpenAIAgentRecoveryCooldown(ctx, req, recovery); err != nil {
 		return nil, decision, err
 	}
-	if req.StrictSessionAffinity {
+	if req.StrictSessionAffinity && openAISameAccountRetryFromContext(ctx).accountID <= 0 {
 		return s.selectStrictSessionAccount(ctx, req)
 	}
 
@@ -565,6 +574,59 @@ func (s *defaultOpenAIAccountScheduler) Select(
 			return nil, decision, prepareErr
 		}
 		req = prepared
+	}
+
+	if retry := openAISameAccountRetryFromContext(ctx); retry.accountID > 0 {
+		unavailable := fmt.Errorf("%w: same-account retry owner unavailable", ErrNoAvailableAccounts)
+		if !OpenAISameAccountRetryAdmissible(ctx, retry.accountID) ||
+			(recovery.ownerBindingRequired() && recovery.owner.accountID != retry.accountID) ||
+			(pointerOwner > 0 && pointerOwner != retry.accountID) ||
+			(req.GuardianParentAccountID > 0 && req.GuardianParentAccountID != retry.accountID) {
+			return nil, decision, unavailable
+		}
+		if previous := strings.TrimSpace(req.PreviousResponseID); previous != "" {
+			owner, readErr := s.service.getOpenAIWSStateStore().GetResponseAccount(ctx, derefGroupID(req.GroupID), previous)
+			if readErr != nil || owner != retry.accountID {
+				return nil, decision, unavailable
+			}
+		}
+		// Retry affinity is an owner constraint, independent of weighted sticky,
+		// priority rebalancing and capacity escape. Reuse all normal admission
+		// checks and the bounded owner WaitPlan; never fall through to the pool.
+		if req.StrictSessionAffinity {
+			snapshot := openAIStickyBindingSnapshotFromContext(ctx, req.GroupID, req.SessionHash)
+			if snapshot == nil || !snapshot.known || snapshot.accountID != retry.accountID || req.StickyAccountID != retry.accountID {
+				return nil, decision, strictSessionUnavailable("retry owner no longer holds the session")
+			}
+			selection, decision, err = s.selectStrictSessionAccount(ctx, req)
+		} else {
+			req.StickyAccountID = retry.accountID
+			req.StickyWeighted = false
+			req.PreserveStickyBinding = true
+			req.DisableStickyEscape = true
+			req.StrictSessionAffinity = true
+			selection, _, err = s.selectBySessionHash(ctx, req)
+		}
+		if err != nil {
+			return nil, decision, err
+		}
+		if selection == nil || selection.Account == nil {
+			return nil, decision, unavailable
+		}
+		if selection.WaitPlan != nil && !retry.deadline.IsZero() {
+			remaining := time.Until(retry.deadline)
+			if remaining <= 0 {
+				return nil, decision, unavailable
+			}
+			if selection.WaitPlan.Timeout <= 0 || remaining < selection.WaitPlan.Timeout {
+				selection.WaitPlan.Timeout = remaining
+			}
+		}
+		decision.Layer = openAIAccountScheduleLayerSessionSticky
+		decision.StickySessionHit = true
+		decision.SelectedAccountID = selection.Account.ID
+		decision.SelectedAccountType = selection.Account.Type
+		return selection, decision, nil
 	}
 
 	previousResponseID := strings.TrimSpace(req.PreviousResponseID)
@@ -627,12 +689,12 @@ func (s *defaultOpenAIAccountScheduler) Select(
 			ownerID = recovery.owner.accountID
 		}
 		if req.GuardianParentAccountID > 0 && req.GuardianParentAccountID != ownerID {
-			return nil, decision, openAIAgentRecoveryError("owner_unavailable")
+			return nil, decision, ownerUnavailable("guardian_owner", ownerID)
 		}
 		if previousResponseID != "" {
 			previousOwner, readErr := s.service.getOpenAIWSStateStore().GetResponseAccount(ctx, derefGroupID(req.GroupID), previousResponseID)
 			if readErr != nil || previousOwner != ownerID {
-				return nil, decision, openAIAgentRecoveryError("owner_unavailable")
+				return nil, decision, ownerUnavailable("response_owner", ownerID)
 			}
 		}
 		selection, _, err = s.selectBySessionHash(ctx, req)
@@ -640,7 +702,7 @@ func (s *defaultOpenAIAccountScheduler) Select(
 			return nil, decision, err
 		}
 		if selection == nil || selection.Account == nil {
-			return nil, decision, openAIAgentRecoveryError("owner_unavailable")
+			return nil, decision, ownerUnavailable("owner_selection", ownerID)
 		}
 		// Reject a changed producer route before entering Forward. This also
 		// gives the explicit history-omission policy a pre-send refusal to handle.
@@ -787,7 +849,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 	req OpenAIAccountScheduleRequest,
 ) (*AccountSelectionResult, bool, error) {
 	sessionHash := strings.TrimSpace(req.SessionHash)
-	if sessionHash == "" || s == nil || s.service == nil || (s.service.cache == nil && req.StickyAccountID <= 0) {
+	if (sessionHash == "" && openAISameAccountRetryFromContext(ctx).accountID <= 0) || s == nil || s.service == nil || (s.service.cache == nil && req.StickyAccountID <= 0) {
 		return nil, false, nil
 	}
 
@@ -2720,7 +2782,18 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForCapability(
 	if len(platformOverride) > 0 {
 		platform = platformOverride[0]
 	}
-	return s.selectAccountWithScheduler(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+	selection, decision, err := s.selectAccountWithScheduler(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+	if err == nil && selection != nil && selection.Account != nil && selection.Account.gatewayProtocolSource != nil {
+		view, readErr := s.openAIGatewaySelectionView(ctx, selection.Account)
+		if readErr != nil {
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			return nil, decision, readErr
+		}
+		selection.Account = view.gatewayProtocolSource
+	}
+	return selection, decision, err
 }
 
 func (s *OpenAIGatewayService) SelectAccountWithSchedulerForImages(
@@ -2927,7 +3000,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 		stickyAccountID, stickyReadErr = s.getStickySessionAccountID(ctx, groupID, sessionHash)
 	}
 	ctx = withOpenAIStickyBindingSnapshot(ctx, groupID, sessionHash, stickyAccountID, stickyReadErr == nil || errors.Is(stickyReadErr, ErrStickySessionNotFound))
-	scheduler := s.getOpenAIAccountScheduler(ctx, platform == PlatformQwen || s.strictOpenAISessionAffinity(groupID, platform, requiredImageCapability) || openAIAgentRecoveryBound(ctx) || (platform == PlatformOpenAI && requiredImageCapability == "" && useUpstreamTokenCost && priorityApplies(priority, OpenAIAccountScheduleRequest{GroupID: groupID, RequestedModel: requestedModel, HistoryModel: observation.model})))
+	scheduler := s.getOpenAIAccountScheduler(ctx, openAISameAccountRetryFromContext(ctx).accountID > 0 || platform == PlatformQwen || s.strictOpenAISessionAffinity(groupID, platform, requiredImageCapability) || openAIAgentRecoveryBound(ctx) || (platform == PlatformOpenAI && requiredImageCapability == "" && useUpstreamTokenCost && priorityApplies(priority, OpenAIAccountScheduleRequest{GroupID: groupID, RequestedModel: requestedModel, HistoryModel: observation.model})))
 	if scheduler == nil {
 		decision.Layer = openAIAccountScheduleLayerLoadBalance
 		if selection, hit, err := s.selectLegacyAccountByPreviousResponse(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform); err != nil {
@@ -3168,8 +3241,20 @@ func (s *OpenAIGatewayService) ReportOpenAIAccountScheduleResult(account *Accoun
 	if account == nil {
 		return false
 	}
+	// A canonical context rejection belongs to the request. Do not penalize the
+	// account or report a successful recovery for this failed request.
+	if !success && len(observedErr) > 0 && errors.Is(observedErr[0], errGatewayContextRejection) {
+		return false
+	}
 	if !success && len(observedErr) > 0 && (isGrokRequestScopedFailure(observedErr[0]) || IsUpstreamModerationDenied(observedErr[0])) {
 		return false
+	}
+	if !success && len(observedErr) > 0 {
+		var failure *UpstreamFailoverError
+		if errors.Is(observedErr[0], ErrOpenAIWSModelUnavailable) ||
+			(errors.As(observedErr[0], &failure) && failure.Reason == OpenAIWSModelUnavailableReason) {
+			return false
+		}
 	}
 	// A failed managed proxy acquisition says nothing about account health.
 	// Keep the existing error response and diagnostics, but do not turn a local
@@ -3204,7 +3289,7 @@ func (s *OpenAIGatewayService) ReportOpenAIAccountScheduleResult(account *Accoun
 // ObserveOpenAIAccountHealthFailure records failures that cannot reach the
 // scheduler-result path, for example after semantic response bytes were sent.
 func (s *OpenAIGatewayService) ObserveOpenAIAccountHealthFailure(ctx context.Context, account *Account, observedErr error) bool {
-	if s == nil || s.rateLimitService == nil || account == nil || observedErr == nil || isGrokRequestScopedFailure(observedErr) || IsUpstreamModerationDenied(observedErr) {
+	if s == nil || s.rateLimitService == nil || account == nil || observedErr == nil || errors.Is(observedErr, ErrOpenAIWSModelUnavailable) || isGrokRequestScopedFailure(observedErr) || IsUpstreamModerationDenied(observedErr) {
 		return false
 	}
 	return s.rateLimitService.ObserveOpenAIAPIKeyHealthFailure(ctx, account, observedErr)

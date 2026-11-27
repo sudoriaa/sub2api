@@ -31,9 +31,7 @@ func ResponsesToChatCompletions(resp *ResponsesResponse, model string) *ChatComp
 		ServiceTier: resp.ServiceTier,
 	}
 
-	var contentText string
-	var refusalText string
-	var reasoningText string
+	var contentParts, refusalParts, reasoningParts []string
 	var toolCalls []ChatToolCall
 
 	for _, item := range resp.Output {
@@ -42,9 +40,9 @@ func ResponsesToChatCompletions(resp *ResponsesResponse, model string) *ChatComp
 			for _, part := range item.Content {
 				switch {
 				case part.Type == "output_text" && part.Text != "":
-					contentText += part.Text
+					contentParts = append(contentParts, part.Text)
 				case part.Type == "refusal" && part.Refusal != "":
-					refusalText += part.Refusal
+					refusalParts = append(refusalParts, part.Refusal)
 				}
 			}
 		case "function_call":
@@ -56,23 +54,38 @@ func ResponsesToChatCompletions(resp *ResponsesResponse, model string) *ChatComp
 					Arguments: item.Arguments,
 				},
 			})
+		case "custom_tool_call":
+			if !resp.RenderCustomToolCalls || (resp.XAIServerSideSearch && IsServerSideSearchCall(item.Type, item.CallID)) {
+				continue
+			}
+			toolCalls = append(toolCalls, ChatToolCall{
+				ID:   item.CallID,
+				Type: "function",
+				Function: ChatFunctionCall{
+					Name:      item.Name,
+					Arguments: item.Input,
+				},
+			})
 		case "reasoning":
-			reasoningText += responsesReasoningText(item)
+			if text := responsesReasoningText(item); text != "" {
+				reasoningParts = append(reasoningParts, text)
+			}
 		case "web_search_call":
 			// silently consumed — results already incorporated into text output
 		}
 	}
 
-	msg := ChatMessage{Role: "assistant", Refusal: refusalText}
+	msg := ChatMessage{
+		Role:             "assistant",
+		Refusal:          strings.Join(refusalParts, ""),
+		ReasoningContent: strings.Join(reasoningParts, ""),
+	}
 	if len(toolCalls) > 0 {
 		msg.ToolCalls = toolCalls
 	}
-	if contentText != "" {
-		raw, _ := json.Marshal(contentText)
+	if len(contentParts) > 0 {
+		raw, _ := json.Marshal(strings.Join(contentParts, ""))
 		msg.Content = raw
-	}
-	if reasoningText != "" {
-		msg.ReasoningContent = reasoningText
 	}
 
 	finishReason := responsesStatusToChatFinishReason(resp.Status, resp.IncompleteDetails, toolCalls)
@@ -130,6 +143,11 @@ type ResponsesEventToChatState struct {
 	OutputIndexToArguments map[int]string
 	IncludeUsage           bool
 	Usage                  *ChatUsage
+
+	// XAIServerSideSearch is set by callers whose upstream is xAI. A
+	// custom_tool_call that IsServerSideSearchCall then never becomes a tool
+	// call, because xAI runs it itself.
+	XAIServerSideSearch bool
 }
 
 // NewResponsesEventToChatState returns an initialised stream state.
@@ -263,6 +281,9 @@ func resToChatHandleOutputItemAdded(evt *ResponsesStreamEvent, state *ResponsesE
 	// function_call 与 custom_tool_call（custom/freeform 工具）均按工具调用注册，
 	// 以便后续 *_input.delta / *_arguments.delta 能映射到正确的工具索引。
 	if evt.Item == nil || (evt.Item.Type != "function_call" && evt.Item.Type != "custom_tool_call") {
+		return nil
+	}
+	if state.XAIServerSideSearch && IsServerSideSearchCall(evt.Item.Type, evt.Item.CallID) {
 		return nil
 	}
 
@@ -501,18 +522,30 @@ type bufferedFuncCall struct {
 	Name                  string
 	Namespace             string
 	EncryptedFunctionArgs json.RawMessage
+	EncryptedContent      string
 	Args                  strings.Builder
+	// ServerSideSearch marks a custom_tool_call the xAI server ran itself; it
+	// is rebuilt as that item, never as a client function_call.
+	ServerSideSearch bool
 }
 
 // BufferedResponseAccumulator collects content from Responses SSE delta events
 // so that non-streaming handlers can reconstruct output when the terminal event
 // (response.completed / response.done) carries an empty output array.
 type BufferedResponseAccumulator struct {
+	// tool_search_call items arrive complete on output_item.done.
+	toolSearchCalls []ResponsesOutput
+
 	text                 strings.Builder
 	refusal              strings.Builder
 	reasoning            strings.Builder
 	funcCalls            []bufferedFuncCall
 	outputIndexToFuncIdx map[int]int
+
+	// XAIServerSideSearch is set by callers whose upstream is xAI. A
+	// custom_tool_call that IsServerSideSearchCall is then rebuilt as that item
+	// instead of as a client function_call.
+	XAIServerSideSearch bool
 }
 
 // NewBufferedResponseAccumulator returns an initialised accumulator.
@@ -545,6 +578,8 @@ func (a *BufferedResponseAccumulator) ProcessEvent(event *ResponsesStreamEvent) 
 				Name:                  event.Item.Name,
 				Namespace:             event.Item.Namespace,
 				EncryptedFunctionArgs: event.Item.EncryptedFunctionArgs,
+				EncryptedContent:      event.Item.EncryptedContent,
+				ServerSideSearch:      a.XAIServerSideSearch && IsServerSideSearchCall(event.Item.Type, event.Item.CallID),
 			})
 		}
 	case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
@@ -564,6 +599,10 @@ func (a *BufferedResponseAccumulator) ProcessEvent(event *ResponsesStreamEvent) 
 				_, _ = a.funcCalls[idx].Args.WriteString(completed)
 			}
 		}
+	case "response.output_item.done":
+		if event.Item != nil && event.Item.Type == "tool_search_call" {
+			a.toolSearchCalls = append(a.toolSearchCalls, *event.Item)
+		}
 	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
 		if event.Delta != "" {
 			_, _ = a.reasoning.WriteString(event.Delta)
@@ -573,7 +612,7 @@ func (a *BufferedResponseAccumulator) ProcessEvent(event *ResponsesStreamEvent) 
 
 // HasContent reports whether any content has been accumulated.
 func (a *BufferedResponseAccumulator) HasContent() bool {
-	return a.text.Len() > 0 || a.refusal.Len() > 0 || len(a.funcCalls) > 0 || a.reasoning.Len() > 0
+	return a.text.Len() > 0 || a.refusal.Len() > 0 || len(a.funcCalls) > 0 || len(a.toolSearchCalls) > 0 || a.reasoning.Len() > 0
 }
 
 // BuildOutput constructs a []ResponsesOutput from the accumulated delta
@@ -608,15 +647,26 @@ func (a *BufferedResponseAccumulator) BuildOutput() []ResponsesOutput {
 	}
 
 	for i := range a.funcCalls {
+		if a.funcCalls[i].ServerSideSearch {
+			out = append(out, ResponsesOutput{
+				Type:   "custom_tool_call",
+				CallID: a.funcCalls[i].CallID,
+				Name:   a.funcCalls[i].Name,
+				Input:  a.funcCalls[i].Args.String(),
+			})
+			continue
+		}
 		out = append(out, ResponsesOutput{
 			Type:                  "function_call",
 			CallID:                a.funcCalls[i].CallID,
 			Name:                  a.funcCalls[i].Name,
 			Namespace:             a.funcCalls[i].Namespace,
 			EncryptedFunctionArgs: a.funcCalls[i].EncryptedFunctionArgs,
+			EncryptedContent:      a.funcCalls[i].EncryptedContent,
 			Arguments:             a.funcCalls[i].Args.String(),
 		})
 	}
+	out = append(out, a.toolSearchCalls...)
 
 	return out
 }

@@ -105,6 +105,20 @@ function findModelRow(wrapper: ReturnType<typeof mountSelector>, modelId: string
 }
 
 describe('ModelWhitelistSelector', () => {
+  it.each(['new_api', 'sub2api'] as const)('fetches %s gateway preview into an editable whitelist and preserves live aliases', async (kind) => {
+    syncUpstreamModelsPreview.mockResolvedValue({ models: ['live', 'new'], discovery_source: 'upstream' })
+    const credentials = { platform: 'gateway', type: 'gateway', upstream_kind: kind,
+      account_id: 46, api_key: '', base_url: 'https://draft.example', proxy_id: 7 }
+    const wrapper = mountSelector({ platform: 'gateway', modelValue: ['old'],
+      modelMappings: [{ from: 'public', to: 'live' }], syncCredentials: credentials })
+    await syncButton(wrapper).trigger('click')
+    await flushPromises()
+    expect(syncUpstreamModelsPreview).toHaveBeenCalledWith(credentials)
+    expect(syncUpstreamModels).not.toHaveBeenCalled()
+    expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual([['live', 'new']])
+    expect(wrapper.emitted('update:modelMappings')?.at(-1)).toEqual([[{ from: 'public', to: 'live' }]])
+  })
+
   beforeEach(() => {
     copyToClipboard.mockClear()
     showError.mockReset()
@@ -119,7 +133,7 @@ describe('ModelWhitelistSelector', () => {
     resetPlatformCatalog()
   })
 
-  it.each(['anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'command_code', 'cline', 'mistral'])(
+  it.each(['gateway', 'anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'command_code', 'cline', 'mistral'])(
     'supports upstream sync for %s saved accounts and creation previews',
     (platform) => {
       const wrappers = [
@@ -168,6 +182,33 @@ describe('ModelWhitelistSelector', () => {
     await flushPromises()
     expect(wrapper.findAll('button').some(button => button.text() === 'admin.accounts.syncUpstreamModels')).toBe(true)
     wrapper.unmount()
+  })
+
+  it.each(['claude-*', '*', 'gpt-*-mini'])(
+    'rejects wildcard whitelist entry %s without clearing the input', async (model) => {
+      const wrapper = mountSelector({ modelValue: ['gpt-5'] })
+      const input = wrapper.get('input[placeholder="admin.accounts.enterCustomModelName"]')
+      await input.setValue(model)
+      await wrapper.findAll('button').find(button => button.text() === 'admin.accounts.addModel')!.trigger('click')
+
+      expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+      expect(showInfo).toHaveBeenCalledWith('admin.accounts.modelWildcardNotSupported')
+      expect((input.element as HTMLInputElement).value).toBe(model)
+    }
+  )
+
+  it('rejects wildcard entries submitted with Enter and accepts a corrected exact model', async () => {
+    const wrapper = mountSelector()
+    const input = wrapper.get('input[placeholder="admin.accounts.enterCustomModelName"]')
+    await input.setValue(' claude-* ')
+    await input.trigger('keydown.enter')
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    expect(showInfo).toHaveBeenCalledWith('admin.accounts.modelWildcardNotSupported')
+
+    await input.setValue(' claude-sonnet-4-5 ')
+    await input.trigger('keydown.enter')
+    expect(wrapper.emitted('update:modelValue')).toEqual([[['claude-sonnet-4-5']]])
+    expect((input.element as HTMLInputElement).value).toBe('')
   })
 
   it('rejects a custom whitelist model that is already mapped to a different target', async () => {

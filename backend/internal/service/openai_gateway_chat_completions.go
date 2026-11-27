@@ -25,20 +25,55 @@ import (
 	"go.uber.org/zap"
 )
 
-// cursorResponsesUnsupportedFields are top-level Responses API parameters that
-// Codex upstreams reject with "Unsupported parameter: ...". They must be
-// stripped when forwarding a raw client body through the Responses-shape
-// short-circuit in ForwardAsChatCompletions (see isResponsesShape branch).
-// The normal Chat Completions → Responses conversion path is unaffected
-// because ChatCompletionsRequest has no fields for these parameters — unknown
-// fields are dropped naturally by json.Unmarshal. Kept semantically in sync
-// with the list in openai_gateway_service.go:2034 used by the /v1/responses
-// passthrough path.
+// The Responses-shaped shortcut forwards a raw body. Strip fields that the
+// typed Chat Completions → Responses conversion omits for this upstream.
 var cursorResponsesUnsupportedFields = []string{
 	"prompt_cache_retention",
 	"safety_identifier",
 	"metadata",
 	"stream_options",
+	"stop",
+}
+
+// Kimi Chat can append function declarations to the conversation in system
+// messages. Responses and Anthropic use a request-level tool list for the
+// current generation. Native Chat forwarding keeps the declarations in place.
+func parseChatRequestForBridge(body []byte, platform string, req *apicompat.ChatCompletionsRequest) error {
+	if platform != PlatformKimi {
+		return json.Unmarshal(body, req)
+	}
+	var wire struct {
+		*apicompat.ChatCompletionsRequest
+		Messages []struct {
+			apicompat.ChatMessage
+			Tools json.RawMessage `json:"tools"`
+		} `json:"messages"`
+	}
+	wire.ChatCompletionsRequest = req
+	if err := json.Unmarshal(body, &wire); err != nil {
+		return err
+	}
+	req.Messages = make([]apicompat.ChatMessage, 0, len(wire.Messages))
+	for i, msg := range wire.Messages {
+		if msg.Role != "system" || msg.Tools == nil {
+			req.Messages = append(req.Messages, msg.ChatMessage)
+			continue
+		}
+		if msg.Content != nil {
+			return fmt.Errorf("messages[%d]: Kimi system tools cannot be used with content", i)
+		}
+		var tools []apicompat.ChatTool
+		if err := json.Unmarshal(msg.Tools, &tools); err != nil {
+			return fmt.Errorf("messages[%d].tools: %w", i, err)
+		}
+		for j, tool := range tools {
+			if tool.Type != "function" || tool.Function == nil || strings.TrimSpace(tool.Function.Name) == "" {
+				return fmt.Errorf("messages[%d].tools[%d]: expected a named function", i, j)
+			}
+		}
+		req.Tools = append(req.Tools, tools...)
+	}
+	return nil
 }
 
 // ForwardAsChatCompletions accepts a Chat Completions request body, converts it
@@ -63,6 +98,13 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	if account.gatewayProtocolsPending() {
+		view, err := s.gatewayProtocolAccount(ctx, account, "openai", gatewayProtocolBodyModel(body))
+		if err != nil {
+			return nil, err
+		}
+		account = view
+	}
 
 	admittedCtx, admissionErr := s.beginPriorityLatencyTurn(ctx, c, account, gjson.GetBytes(body, "model").String())
 	if admissionErr != nil {
@@ -110,6 +152,14 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		return nil, admissionErr
 	}
 	account = latest
+	// Alias normalization must follow the payload shape: Responses-shaped
+	// Chat requests may bypass the typed converter and go straight upstream.
+	isResponsesShape := !gjson.GetBytes(body, "messages").Exists() && gjson.GetBytes(body, "input").Exists()
+	effortPath := "reasoning_effort"
+	if isResponsesShape {
+		effortPath = "reasoning.effort"
+	}
+	body = normalizeQwenRequestEffort(account, body, defaultMappedModel, effortPath)
 	proxyCtx, releaseProxy, proxyErr := s.beginOpenAIRequestProxy(ctx, c, account)
 	if proxyErr != nil {
 		return nil, proxyErr
@@ -160,7 +210,6 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// Cursor compatibility: some clients send a Responses-shaped body to the
 	// /v1/chat/completions URL. Detect it before protocol routing so adaptive
 	// accounts never forward the body unchanged to a Chat Completions endpoint.
-	isResponsesShape := !gjson.GetBytes(body, "messages").Exists() && gjson.GetBytes(body, "input").Exists()
 	inbound := APIProtocolChatCompletions
 	if isResponsesShape {
 		inbound = APIProtocolResponses
@@ -206,7 +255,10 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 
 	// 1. Parse Chat Completions request
 	var chatReq apicompat.ChatCompletionsRequest
-	if err := json.Unmarshal(body, &chatReq); err != nil {
+	if err := parseChatRequestForBridge(body, account.Platform, &chatReq); err != nil {
+		if account.Platform == PlatformKimi {
+			writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		}
 		return nil, fmt.Errorf("parse chat completions request: %w", err)
 	}
 	originalModel := chatReq.Model
@@ -292,6 +344,9 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		if err != nil {
 			return nil, fmt.Errorf("marshal responses request: %w", err)
 		}
+		// responsesReq lives until billing after the stream; only its scalar
+		// fields are read from here on, so drop the body-sized input.
+		responsesReq.Input = nil
 	}
 
 	logFields := []zap.Field{
@@ -336,7 +391,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		} else if promptCacheKey != "" {
 			reqBody["prompt_cache_key"] = promptCacheKey
 		}
-		s.applyCodexAccountIdentityOrHarvestPinMap(ctx, account, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c), upstreamModel, reqBody)
+		s.applyCodexAccountIdentityOrHarvestPinMap(ctx, account, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c), upstreamModel, reqBody, codexClientSessionID(c))
 		responsesBody, err = json.Marshal(reqBody)
 		if err != nil {
 			return nil, fmt.Errorf("remarshal after codex transform: %w", err)
@@ -398,6 +453,13 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	}
 
 	// 5. Get access token
+	if account.gatewayProtocolSource != nil {
+		latest, err := s.admitOpenAITurn(ctx, c, account, upstreamModel, responsesBody)
+		if err != nil {
+			return nil, err
+		}
+		account = latest
+	}
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		return nil, fmt.Errorf("get access token: %w", err)
@@ -934,6 +996,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 
 	state := apicompat.NewResponsesEventToChatState()
 	state.Model = originalModel
+	state.XAIServerSideSearch = account != nil && account.IsGrok()
 	// 网关作为计费链路的一环，不能把下游 usage 输出绑定到客户端是否显式请求。
 	// raw Chat Completions 直转路径已经强制透出 usage，这里保持同样行为，避免级联代理计费为 0。
 	state.IncludeUsage = true
@@ -998,6 +1061,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		payload = string(restoreCodexToolNamesFromContext(c, []byte(payload)))
 		if countSearch {
 			searchCount += countGrokNativeSearchCallsInSSEDataDedup([]byte(payload), streamSearchSeen)
+			searchCount = grokSearchCountWithTerminalUsage(searchCount, []byte(payload))
 		}
 
 		var event apicompat.ResponsesStreamEvent
@@ -1067,6 +1131,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				streamFailoverErr = s.newOpenAIStreamFailoverErrorWithModel(c, account, false, requestID, payloadBytes, message, upstreamModel, resp.Header)
 				return true
 			}
+			s.handleOpenAIStreamTerminalAccountSideEffects(c, account, payloadBytes, message, resp.Header, upstreamModel)
 			message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payloadBytes, message)
 			defaultStatus, defaultErrType, defaultMsg := http.StatusBadGateway, "upstream_error", message
 			failureStatus := openAIStreamFailureStatus(payloadBytes, message)

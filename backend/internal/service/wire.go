@@ -802,11 +802,16 @@ func ProvideScheduledTestRunnerService(
 	rdb *redis.Client,
 	groupTests *PelicanGroupTestService,
 	monitor *ChannelMonitorV2Service,
+	concurrency *ConcurrencyService,
 ) *ScheduledTestRunnerService {
 	svc := NewScheduledTestRunnerService(planRepo, scheduledSvc, accountTestSvc, rateLimitSvc, cfg)
 	if rdb != nil {
 		svc.qualityTrigger = &quality5xxTrigger{queue: qualityqueue.NewRedis(rdb)}
 	}
+	if accountTestSvc != nil {
+		svc.oauth429Repo, _ = accountTestSvc.accountRepo.(OAuth429Repository)
+	}
+	svc.oauth429Slots = concurrency
 	svc.judgeQuality = judge.Judge
 	svc.groupTests = groupTests
 	svc.candyMonitor = monitor.candy
@@ -1133,7 +1138,7 @@ var ProviderSet = wire.NewSet(
 	ProvideOpsCleanupService,
 	ProvideOpsScheduledReportService,
 	ProvideAccountOpsService,
-	ProvideAccountTokenGuardService,
+	NewOpenAIReloginService,
 	ProvideAccountTokenGuardV2Service,
 	NewEmailService,
 	NewNotificationEmailService,
@@ -1201,7 +1206,52 @@ var ProviderSet = wire.NewSet(
 	NewSupportTicketService,
 	NewChannelMonitorRequestTemplateService,
 	ProvideUserPlatformQuotaUsageFlusher,
+	NewUsageBillingLaneCombiner,
+	ProvideUsageBillingRepository,
 )
+
+// ProvideUsageBillingRepository 以按用户合并结算的通道作为各服务使用的计费仓储。
+func ProvideUsageBillingRepository(lanes *UsageBillingLaneCombiner) UsageBillingRepository {
+	if durable, ok := lanes.repo.(DurableUsageBillingRepository); ok {
+		wrapped := &durableUsageBillingLanes{UsageBillingLaneCombiner: lanes, DurableUsageBillingRepository: durable}
+		if settlement, ok := lanes.repo.(UsageSettlementRepository); ok {
+			return &upstreamUsageBillingLanes{wrapped, settlement}
+		}
+		return wrapped
+	}
+	return lanes
+}
+
+type upstreamUsageBillingLanes struct {
+	*durableUsageBillingLanes
+	UsageSettlementRepository
+}
+
+// Staged delivery keeps its transactional journal and cache acknowledgement.
+// Direct Apply users use service lanes; staged delivery uses repository lanes.
+type durableUsageBillingLanes struct {
+	*UsageBillingLaneCombiner
+	DurableUsageBillingRepository
+}
+
+func (r *durableUsageBillingLanes) RecoverStagedUsageBilling(ctx context.Context, key UsageBillingEventKey) (*UsageBillingRecovery, error) {
+	if worker, ok := r.DurableUsageBillingRepository.(interface {
+		RecoverStagedUsageBilling(context.Context, UsageBillingEventKey) (*UsageBillingRecovery, error)
+	}); ok {
+		return worker.RecoverStagedUsageBilling(ctx, key)
+	}
+	return r.ApplyStagedUsageBilling(ctx, key)
+}
+
+// Preserve retry rotation so a failed cache invalidation cannot starve later receipts.
+func (r *durableUsageBillingLanes) DeferUsageBillingCache(ctx context.Context, key UsageBillingEventKey) error {
+	if retry, ok := r.DurableUsageBillingRepository.(interface {
+		DeferUsageBillingCache(context.Context, UsageBillingEventKey) error
+	}); ok {
+		return retry.DeferUsageBillingCache(ctx, key)
+	}
+	return nil
+}
 
 // ProvideUserPlatformQuotaUsageFlusher 创建并启动 UserPlatformQuotaUsageFlusher。
 func ProvideUserPlatformQuotaUsageFlusher(cfg *config.Config, cache BillingCache, quotaRepo UserPlatformQuotaRepository, tw *TimingWheelService) *UserPlatformQuotaUsageFlusher {
@@ -1319,17 +1369,12 @@ func ProvideAccountOpsService(settings SettingRepository, repo AccountOpsReposit
 	svc.SetNotificationQuotaReaders(usageLogs, geminiQuota)
 	svc.autoAccounts, _ = accounts.(AccountConcurrencyRepository)
 	svc.autoGroups = groups
+	if routing, ok := accounts.(OAuth429RoutingConfigurator); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		svc.oauth429Routing, svc.oauth429RoutingErr = routing.ConfigureOAuth429Routing(ctx, oauth429ConfiguredCompactModel(cfg))
+		cancel()
+	}
 	svc.start(cfg.RunsBackgroundJobs())
-	return svc
-}
-
-// ProvideAccountTokenGuardService 创建并启动「凭证守护」后台巡检（智能运维子页面）。
-func ProvideAccountTokenGuardService(settings SettingRepository, repo AccountTokenGuardRepository,
-	accounts AccountRepository, admin AdminService, invalidator TokenCacheInvalidator,
-	cfg *config.Config,
-) *AccountTokenGuardService {
-	svc := NewAccountTokenGuardService(settings, repo, accounts, admin, invalidator)
-	startBackgroundService(cfg, svc)
 	return svc
 }
 

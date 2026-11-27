@@ -1,5 +1,12 @@
 export default {
     accounts: {
+      domesticRouteAutoSchedule: 'Automatic scheduling by domestic model route latency',
+      domesticRouteAutoScheduleHint: 'Sends a short streaming request over this account’s route every hour. Upstream charges may apply. A first text under 3 seconds enables scheduling. A slower response, timeout or upstream failure pauses scheduling. Paused accounts are tested again.',
+      platformSwitch: {
+        hint: 'Choose a platform compatible with this credential type. The API key and custom URL are retained; verify that the target supports this upstream.',
+        resetHint: 'Switching resets model mappings, platform-specific settings and incompatible groups. Review and save the target settings before synchronizing models or refreshing usage.',
+        boundCredentials: 'This authorization type or shadow account is bound to its platform. Create and authorize an account on the target platform.'
+      },
       timer: {
         "manage": "Scheduled tasks",
         "planType": "Task type",
@@ -449,6 +456,14 @@ export default {
         }
       },
       upstreamBilling: {
+        autoSyncGroup: 'Auto-sync upstream group name and notes',
+        autoSyncGroupHint: 'A successful probe replaces the local name and notes with any text the upstream provides. Account rate sync is controlled separately.',
+        syncGroup: 'Sync upstream group name and notes',
+        saveGroup: 'Sync and save upstream group name and notes',
+        groupCredentials: 'Enter the upstream URL and API key. Re-enter the key after changing the URL or proxy.',
+        groupUnavailable: 'The upstream returned no group name or description to sync.',
+        groupFailed: 'Failed to sync upstream group details',
+        groupSynced: 'Account name and notes synced',
         newAPI: {
           upstreamVerificationFailed: "The upstream query could not be completed. Check site connectivity, the user ID, and the access token, including permission to read the wallet and complete token inventory.",
           keyNotOwned: "This account API key was not found in this user token inventory.",
@@ -469,13 +484,23 @@ export default {
           boundUser: "Configured user {id}",
           preview: "Preview",
           save: "Verify and save",
-          wallet: "Wallet balance (normalized USD): {amount}",
+          wallet: "Wallet balance: {amount}",
           matched: "API key matched",
           needsSelection: "Select the matching token",
           group: "Group: {name}",
           groupRatio: "Group ratio",
           ratio: "Group ratio: {value}x",
-          groupRatioHint: "A group ratio is a billing coefficient for that group, not the actual cost multiplier for every model. It does not change local account multipliers.",
+          convertedDeclaration: 'Converted upstream rate: {rate} × 7 = {value}x',
+          groupRatioHint: 'The upstream group ratio excludes model prices. Purchase cost follows the account’s USD conversion and auto-sync settings; customer prices are unchanged.',
+        costConversion: 'Purchase cost conversion',
+        costConversionHint: 'USD conversion is enabled by default: CN platforms ×1, other platforms ×7. Uncheck to use the upstream ratio ×1 as purchase cost. Customer prices are unchanged.',
+        applyUSDRate: 'Apply USD conversion',
+        requestPlatformFactor: 'Procurement cost is converted for each request’s target platform',
+        costPlatformFactor: 'Platform conversion ×{factor}',
+        costPreview: 'Purchase cost multiplier: {rate} × {scale} = {cost}',
+        costSyncPaused: 'Cost sync is disabled for this account; manual cost is preserved. Enable it in the account editor.',
+        costUnavailable: 'No fixed group ratio is available; the saved cost is preserved.',
+        costManagedHint: 'New API derives cost conversion from the platform. Manage the USD conversion option in the upstream billing configuration.',
           noFixedRatio: "No fixed group ratio",
           chooseToken: "Several tokens may match. Select the token for this account.",
           chooseTokenPlaceholder: "Select a token",
@@ -570,6 +595,7 @@ export default {
       subscriptionExpires: 'Expires',
       // Capacity status tooltips
       capacity: {
+        concurrencyUnavailable: 'Current concurrency is unavailable. Refresh to retry.',
         windowCost: {
           blocked: '5h window cost exceeded, account scheduling paused',
           stickyOnly: '5h window cost at threshold, only sticky sessions allowed',
@@ -706,6 +732,8 @@ export default {
       testConnection: 'Test Connection',
       reAuthorize: 'Re-Authorize',
       refreshToken: 'Refresh Token',
+      refreshTokenHint: 'Tokens are refreshed automatically in the background. Frequent manual refreshes can race the automatic refresh and invalidate the token, pausing the account.',
+      refreshTokenFrequentWarning: 'Less than a minute since the last manual refresh: frequent refreshes can race the background auto-refresh and invalidate the token. Only retry when necessary.',
       noAccountsYet: 'No accounts yet',
       createFirstAccount: 'Create your first account to start using AI services.',
       tokenRefreshed: 'Token refreshed successfully',
@@ -807,6 +835,7 @@ export default {
       deleteConfirm: "Are you sure you want to delete '{name}'? This action cannot be undone.",
       // Create/Edit Account Modal
       platform: 'Platform',
+      gatewayProvider: 'Upstream provider',
       accountName: 'Account Name',
       enterAccountName: 'Enter account name',
       accountType: 'Account Type',
@@ -968,6 +997,9 @@ export default {
         copilotSDKDesc: 'Preserve native Codex tools and cancel SDK turns on disconnect. Use a dedicated group with one sidecar account; Base URL and API Key belong to the sidecar.',
         oauthPassthroughDesc:
           'When enabled, this OpenAI account uses automatic passthrough: the gateway forwards request/response as-is and only swaps auth, while keeping billing/concurrency/audit and necessary safety filtering.',
+        passthroughModelFilter: 'Filter passthrough accounts by model',
+        passthroughModelFilterDesc:
+          'Use the account model whitelist and mapping source names to select this account. Mapping targets do not rename passthrough requests. An empty list allows all models. Disabled by default.',
         flattenNamespaces: 'Flatten Codex namespace tools (compatibility)',
         flattenNamespacesDesc:
           'Disabled by default: Codex namespace tool declarations are forwarded as-is on /responses, which is what the ChatGPT Codex backend expects. Enable only when this OAuth account is routed to a relay that rejects namespace tools — flattening renames them to namespace__tool, which breaks models that address collaboration tools as functions.<namespace>.<tool>. Compaction requests always flatten regardless of this switch.',
@@ -976,7 +1008,7 @@ export default {
           'Disabled by default. Enable only when this account\'s upstream charges OpenAI API long-context rates above the model threshold.',
         ultrafastBilling: 'UltraFast tier billing',
         ultrafastBillingDesc:
-          'Disabled by default. When enabled, read service_tier from upstream responses; every model on this account uses its standard price ×6 for ultrafast, including cache reads and writes, then applies account/group multipliers. If the response omits the tier, bill the requested tier. Explicit ultrafast requests that settle at that tier are billed at 6× even with this switch off. This does not force UltraFast upstream.',
+          'Disabled by default. When enabled, read service_tier from upstream responses and apply the model’s UltraFast multiplier to Standard prices, including cache reads and writes. GPT-6.2 Sol/Astra cost 3× before March 1, 2027 00:00 Pacific, then 6×; other models default to 6×. Channel overrides and Free UltraFast still apply. Missing response tiers fall back to the request. Disabling this switch does not waive the premium on explicit UltraFast requests or force upstream acceleration.',
         responsesWebsocketsV2: 'Responses WebSocket v2',
         responsesWebsocketsV2Desc:
           'Disabled by default. Enable to allow responses_websockets_v2 capability (still gated by global and account-type switches).',
@@ -1088,7 +1120,7 @@ export default {
         testModeDefault: 'Default request',
         testModeCompact: 'Compact probe',
         testModeBPSTools: 'BPS tool roundtrip (up to 3 upstream requests)',
-        modelRestrictionDisabledByPassthrough: 'Automatic passthrough is enabled: model whitelist/mapping will not take effect.',
+        modelRestrictionDisabledByPassthrough: 'Automatic passthrough ignores model restrictions by default. Enable "Filter passthrough accounts by model" to use them for account selection only.',
       },
       grok: {
         baseUrlHint: 'Grok OAuth accounts forward to the official xAI API base URL.',
@@ -1146,6 +1178,9 @@ export default {
         apiKeyPassthrough: 'Auto passthrough (auth only)',
         apiKeyPassthroughDesc:
           'Only applies to Anthropic API Key accounts. When enabled, messages/count_tokens are forwarded in passthrough mode with auth replacement only, while billing/concurrency/audit and safety filtering are preserved. Disable to roll back immediately.',
+        cacheTtlBillingFromRequest: 'Bill cache writes by requested TTL',
+        cacheTtlBillingFromRequestDesc:
+          'Only applies to Anthropic API Key accounts, for relays whose upstream rewrites the cache TTL. When enabled, cache writes are billed by the client cache_control.ttl: if any breakpoint explicitly requests 1h, all cache writes of that request bill as 1h (mixed TTLs are not split per breakpoint); an omitted ttl or 5m-only request bills as 5m. Request and response bodies are not modified. Disable it if the upstream stops settling at the 5m rate, or 5m requests may be billed below cost.',
         stripClaudeCodeIdentity: 'Strip Claude Code identity',
         stripClaudeCodeIdentityDesc:
           'Only applies to Anthropic API Key accounts. When enabled, forwarding and connectivity tests automatically strip Claude Code / Agent SDK client signals (rewriting claude-cli User-Agent, removing claude-code/oauth betas, stripping x-anthropic-billing-header blocks and official CLI/SDK identity banners from system, and removing metadata.user_id) so official API keys restricted from Claude Code (such as sk-ant-usr-* credit keys) are not rejected with a low credit balance error.',
@@ -1184,6 +1219,24 @@ export default {
       targetNoWildcard: 'Target model cannot contain wildcard *',
       searchModels: 'Search models...',
       noMatchingModels: 'No matching models',
+      batchUpstream: {
+        stop: 'Stop queued accounts',
+        retry: 'Retry failed accounts only',
+        submitted: 'Submitted',
+        stopped: 'Not started',
+        unchanged: 'Already up to date',
+        empty: 'The upstream catalog was empty',
+        account_policy: 'Protected account policy',
+        account_changed: 'Account changed during discovery',
+        unverified_catalog: 'No verified upstream catalog',
+        unknown: 'Check the account before retrying',
+        draining: 'Waiting for previously submitted accounts.',
+        start: 'Batch sync upstream models',
+        hint: 'Save each selected account’s own upstream whitelist immediately using its saved connection. Valid aliases are kept; empty or unsupported catalogs keep the old whitelist. Stopping or closing stops queued accounts; submitted requests can still save. Other edits are saved separately.',
+        saved: 'Saved',
+        failed: 'Failed',
+        pending: 'Waiting',
+      },
       fillRelatedModels: 'Sync latest supported models',
       syncUpstreamModels: 'Sync upstream supported models',
       syncUpstreamModelsLoading: 'Syncing upstream...',
@@ -1202,6 +1255,7 @@ export default {
       enterCustomModelName: 'Enter custom model name',
       addModel: 'Add',
       modelExists: 'Model already exists',
+      modelWildcardNotSupported: 'Wildcards are not supported in the model whitelist. Enter an exact model name.',
       modelMappingConflict: 'A mapping already exists for {from} → {to}. Modify or remove it under Model Mapping before adding this whitelist model',
       modelCount: '{count} models',
       poolMode: 'Pool Mode',
@@ -1257,7 +1311,25 @@ export default {
         blockedName: 'This header cannot be overridden (auth and connection-control headers are managed by the system)',
         duplicateName: 'Duplicate header name (matching is case-insensitive)',
         invalidValue: 'Invalid header value (control characters are not allowed; max length 8192)',
-        tooManyEntries: 'Too many header override entries (max 64)'
+        tooManyEntries: 'Too many header override entries (max 64)',
+        invalidVariable: 'Invalid variable: pick one from "Identity variables" below; other variable names are not supported',
+        variableNotAllowed: 'OAuth accounts do not support identity variables. Remove this row or use a fixed value',
+        removeRow: 'Remove this header',
+        previewLabel: 'Sent as',
+        variablesTitle: 'Identity variables',
+        variablesHint: 'Report the gateway user behind each request to the upstream, so a request can be traced back layer by layer. Click a variable while editing a value to insert it at the cursor; otherwise a new row is added.',
+        variablesUnavailable: 'OAuth accounts do not support identity variables: subscription upstreams never receive gateway user identity. Only fixed values can be used here.',
+        variables: {
+          user_id: { label: 'User ID', desc: 'The gateway user who sent the request' },
+          api_key_id: { label: 'API Key ID', desc: 'The key used for this request; tells apart multiple keys of one user' },
+          group_id: { label: 'Group ID', desc: 'The group bound to the key; the header is not sent when no group is bound' },
+          request_id: { label: 'Request ID', desc: 'Same as the "Request ID" in error records, for direct cross-checking; characters other than letters, digits and . _ - become underscores' }
+        },
+        variableNotes: {
+          unresolved: 'When a value is unavailable (connection tests, model sync and other background requests without a user), the whole header is not sent, and a same-named header from the client is not passed through either.',
+          apiKeyOnly: 'Only applies to API key accounts. OAuth accounts never report identity.',
+          websocket: 'In OpenAI WebSocket mode handshake headers are per connection: headers containing the request ID are not sent, and requests with different reported identities never share an upstream connection.'
+        }
       },
       grokModelDiagnostics: {
         title: 'Model catalog diagnostics',
@@ -1472,6 +1544,14 @@ export default {
       priorityHint: 'Lower value accounts are used first',
       billingRateMultiplier: 'Billing Rate Multiplier',
       costMultiplier: 'Cost multiplier',
+      probePenalty: {
+        title: 'Probe penalty',
+        hint: 'Set a minimum charge for completed token-billed requests through this Claude account. Ordinary short requests are also affected. Disabled by default.',
+        minimum: 'Minimum charge per request ($ credit)',
+        downstream: 'Below the minimum, charge the difference and return billing-equivalent tokens while retaining original usage. Downstream gateways apply their own prices; matching prices and multipliers differ by less than one output token price due to rounding.',
+        invalid: 'Enter an amount from 0 to 1000 with up to 8 decimal places. A positive amount is required when enabled.',
+        adjustment: 'Probe penalty adjustment',
+      },
       costMultiplierHint: 'Defaults to 0.1; follow upstream updates or turn off to enter your actual cost, without changing billing.',
       costMultiplierAutoSync: 'Follow upstream',
       costMultiplierInvalid: 'Cost multiplier must be a finite number between 0 and 1000000.',
@@ -2003,9 +2083,9 @@ export default {
         question: 'Question',
         candyQuestion: 'Candy logic test',
         pelicanQuestion: 'Pelican riding a bicycle (HTML)',
-        stateProbeQuestion: 'Quality check (full capability or degraded in seconds)',
-        stateProbeHint: 'No question is sent: each run fires one turn-quality check and records Full capability / Degraded / Inconclusive. OpenAI subscription (OAuth) accounts only; one check per account at a time, so parallel runs are fixed at 1.',
-        stateProbeBadge: 'Quality check',
+        stateProbeQuestion: 'Probe test (full capability or degraded in seconds)',
+        stateProbeHint: 'No question is sent: each run performs one probe test and records Full capability / Degraded / Inconclusive. OpenAI subscription (OAuth) accounts only; one probe per account at a time, so parallel runs are fixed at 1.',
+        stateProbeBadge: 'Probe test',
         candyHint: 'The original question has a reference answer of 21. Compare this response without treating it as a permanent account capability rating.',
 
         recordCount: '{count} records',
@@ -2066,16 +2146,16 @@ export default {
         emptyResponse: 'The model returned an empty response',
         invalidHtml: 'The model did not return standalone HTML that can be displayed',
         modeQuestion: 'Question test',
-        modeProbe: 'Quality check',
+        modeProbe: 'Probe test',
         probe: {
           intro: 'Sends two tiny requests and answers in seconds: mint a turn-state ticket, then continue with it. A new ticket on the continuation means the account is degraded.',
-          scheduleHint: 'To run it on a schedule: switch to "Question test" → "Scheduled tests" → "Add plan" and pick "Quality check" as the question.',
+          scheduleHint: 'To run it on a schedule: switch to "Question test" → "Scheduled tests" → "Add plan" and pick "Probe test" as the question.',
           unsupported: 'The probe only works for OpenAI subscription (OAuth) accounts. Use the question test for this account.',
           modelHint: 'Defaults to gpt-6-astra and follows the account model mapping. Free plans that do not support the model report "Model not supported".',
-          start: 'Start check',
+          start: 'Start probe test',
           probing: 'Probing...',
           running: 'Probing, usually a few seconds and at most about 90 seconds',
-          empty: 'Click "Start check" and the result will appear here.',
+          empty: 'Click "Start probe test" and the result will appear here.',
           verdictHealthy: 'Full capability',
           verdictDegraded: 'Degraded',
           verdictInconclusive: 'Inconclusive',
@@ -2088,12 +2168,12 @@ export default {
           newTicket: 'New ticket on continue',
           yes: 'Yes',
           no: 'No',
-          model: 'Check model',
+          model: 'Probe model',
           reportedModel: 'Reported model',
           latency: 'Duration',
           finishedAt: 'Finished at',
           limitation: 'The verdict only uses the turn-state header (x-codex-turn-state), not the reported model name, which still says astra after a downgrade to luna. A single result can be affected by upstream noise; compare several runs or the question test.',
-          requestFailed: 'Quality check request failed',
+          requestFailed: 'Probe test request failed',
           failures: {
             unsupported: 'Account not supported',
             account_error: 'Account authentication error',
@@ -2193,6 +2273,10 @@ export default {
         grokLastHeadersSeen: 'Headers {time}',
         passiveSampled: 'Passive',
         activeQuery: 'Query',
+        quotaRefreshFailedCached: 'Refresh failed. Showing a previous observation; remaining quota is unconfirmed.',
+        quotaRefreshFailedUnknown: 'Refresh failed. Current quota is unknown.',
+        quotaObservedAt: 'Quota observed: ',
+        quotaObservationUnknown: 'Unknown (cached)',
         estimatedTotalCost: 'Est. total ${cost}',
         estimatedTotalCostTooltip: 'Estimated total cost at 100% utilization, based on current window cost and utilization'
       },

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/tidwall/gjson"
 
@@ -53,6 +54,37 @@ func (s *GatewayService) shouldFailoverUpstreamError(statusCode int) bool {
 	}
 }
 
+// rotatedClaudeAccessToken recovers a token rotated while this request was in
+// flight. Compare against the token actually sent, which may have come from the
+// cache rather than the account snapshot. Never refresh or persist credentials
+// here: an unchanged token must retain the normal 401 policy.
+func (s *GatewayService) rotatedClaudeAccessToken(ctx context.Context, account *Account, rejectedToken string) string {
+	if account == nil || account.Platform != PlatformAnthropic || account.Type != AccountTypeOAuth ||
+		s.accountRepo == nil || rejectedToken == "" || ctx.Err() != nil {
+		return ""
+	}
+	latest, err := s.accountRepo.GetByID(ctx, account.ID)
+	if err != nil {
+		slog.Warn("claude_oauth_401_reload_failed", "account_id", account.ID, "error", err)
+		return ""
+	}
+	if latest == nil || latest.Platform != PlatformAnthropic || latest.Type != AccountTypeOAuth ||
+		latest.Status != StatusActive || !latest.Schedulable {
+		return ""
+	}
+	token := strings.TrimSpace(latest.GetCredential("access_token"))
+	if token == "" || token == rejectedToken {
+		return ""
+	}
+	if p := s.claudeTokenProvider; p != nil && p.tokenCache != nil {
+		if err := p.tokenCache.DeleteAccessToken(ctx, ClaudeTokenCacheKey(latest)); err != nil {
+			slog.Warn("claude_oauth_401_invalidate_cache_failed", "account_id", account.ID, "error", err)
+		}
+	}
+	slog.Info("claude_oauth_rotated_token_retry", "account_id", account.ID)
+	return token
+}
+
 func retryBackoffDelay(attempt int) time.Duration {
 	// attempt 从 1 开始，表示第 attempt 次请求刚失败，需要等待后进行第 attempt+1 次请求。
 	if attempt <= 0 {
@@ -89,6 +121,18 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 
 // Forward 转发请求到Claude API
 func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) (result *ForwardResult, err error) {
+	if account.gatewayProtocolsPending() {
+		if parsed != nil && parsed.GroupID != nil {
+			if group, ok := ctx.Value(ctxkey.Group).(*Group); !ok || group == nil || group.ID != *parsed.GroupID {
+				return nil, ErrGatewayAccountGroup
+			}
+		}
+		view, err := s.gatewayProtocolAccount(ctx, account, "anthropic", gatewayProtocolParsedModel(parsed))
+		if err != nil {
+			return nil, err
+		}
+		account = view
+	}
 	if err := CheckUpstreamModeration(ctx, c, account); err != nil {
 		return nil, err
 	}
@@ -108,11 +152,16 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			validationModel = account.GetMappedModel(validationModel)
 		}
 	}
-	if account != nil && account.Platform == PlatformAnthropic {
-		if err := validateClaude55Request(parsed.Body.Bytes(), validationModel); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "invalid_request_error", "message": err.Error()}})
-			return nil, err
-		}
+	prepared, err := prepareClaudeMessagesRequest(account, parsed, validationModel)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "invalid_request_error", "message": err.Error()}})
+		return nil, err
+	}
+	parsed = prepared
+	// 按请求 TTL 计费：在任何请求体改写之前读取客户端原始的 cache_control.ttl。
+	requestedCacheTTL := ""
+	if account.IsCacheTTLBillingFromRequestEnabled() {
+		requestedCacheTTL = requestedAnthropicCacheTTL(parsed.Body.Bytes())
 	}
 	// Anthropic Fast is requested with speed=fast rather than OpenAI's
 	// service_tier. Attach it at this shared boundary so passthrough, OAuth and
@@ -122,6 +171,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			if tier := anthropicSpeedServiceTier(account, parsed.Speed, anthropicSpeedModel(parsed, result)); tier != nil {
 				result.ServiceTier = tier
 			}
+			result.RequestedCacheTTL = requestedCacheTTL
 			attachClaudeCodeMimicInjection(c, account, result)
 		}
 	}()
@@ -394,6 +444,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	var resp *http.Response
 	lastWireBody := body
 	retryStart := time.Now()
+	retriedRotatedToken := false
 	for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
 		// 构建上游请求（每次重试需要重新构建，因为请求体需要重新读取）
 		upstreamReq, wireBody, err := s.buildUpstreamRequest(ctx, c, account, body, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
@@ -417,12 +468,31 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		if isAnthropicRequestTooLarge(account, resp) {
 			return handleAnthropicRequestTooLarge(c, resp)
 		}
+		if s.interceptAnthropicContextRejection(c, account, resp) {
+			return nil, errGatewayContextRejection
+		}
+
+		if resp.StatusCode == http.StatusUnauthorized && !retriedRotatedToken &&
+			attempt < maxRetryAttempts && time.Since(retryStart) < maxRetryElapsed {
+			if rotatedToken := s.rotatedClaudeAccessToken(ctx, account, token); rotatedToken != "" {
+				_ = resp.Body.Close()
+				token = rotatedToken
+				retriedRotatedToken = true
+				continue
+			}
+		}
 
 		// 优先检测thinking block签名错误（400）并重试一次
 		if resp.StatusCode == 400 {
 			respBody, readErr := s.readUpstreamErrorBody(resp)
 			if readErr == nil {
 				_ = resp.Body.Close()
+
+				if aiwanwuThinkingRoute(account, reqModel) {
+					if failure := aiwanwuThinkingFailover(c, account, resp, respBody); failure != nil {
+						return nil, failure
+					}
+				}
 
 				if s.shouldRectifySignatureError(ctx, account, respBody, reqModel) {
 					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -627,6 +697,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		// 检查是否需要通用重试（排除400，因为400已经在上面特殊处理过了）
 		if resp.StatusCode >= 400 && resp.StatusCode != 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
 			if attempt < maxRetryAttempts {
+				if failure := s.anthropicModelNotFoundFailover(c, account, resp); failure != nil {
+					return nil, failure
+				}
 				elapsed := time.Since(retryStart)
 				if elapsed >= maxRetryElapsed {
 					break
@@ -687,11 +760,17 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	if isAnthropicRequestTooLarge(account, resp) {
 		return handleAnthropicRequestTooLarge(c, resp)
 	}
+	if s.interceptAnthropicContextRejection(c, account, resp) {
+		return nil, errGatewayContextRejection
+	}
 	if resp == nil || resp.Body == nil {
 		return nil, errors.New("upstream request failed: empty response")
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if failure := s.anthropicModelNotFoundFailover(c, account, resp); failure != nil {
+		return nil, failure
+	}
 	// 处理重试耗尽的情况
 	if resp.StatusCode >= 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
@@ -837,7 +916,12 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		if err != nil {
 			var sseErr *sseStreamErrorEventError
 			if errors.As(err, &sseErr) {
-				return nil, s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, reqModel, c.Writer.Size() != writerSizeBeforeStream)
+				policyErr := s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, reqModel, c.Writer.Size() != writerSizeBeforeStream)
+				partial := partialStreamUsageResult(c, resp, streamResult, originalModel, mappedModel, startTime, err)
+				if partial != nil || c.Writer.Size() != writerSizeBeforeStream {
+					return partial, errors.New("stream usage incomplete: upstream semantic stream failure")
+				}
+				return nil, policyErr
 			}
 			// 流中断（缺失 terminal 事件、读错误、数据间隔超时等）时保留已观测到的
 			// usage 与错误一起返回，handler 在错误处理完成后照常提交 usage 记录。
@@ -1057,13 +1141,17 @@ func anthropicStreamErrorStatus(body []byte) int {
 
 // sseStreamErrorEventFailover 把上游 HTTP 200 + SSE 流体内的 event:error 帧转为
 // UpstreamFailoverError：尚未向客户端写出内容且错误类型为 overloaded_error 时按 529
-// 处理并触发账号侧副作用，其余按 403；同时登记 stream_error 运维记录。
+// 处理并触发账号侧副作用。stream_incomplete 按 502 记录到 Ops，其余沿用 403。
 // 客户端已经开始收到内容后，默认不触发临时不可调度；只有 stream_timing=after_stream
 // 的规则可以按上面的语义状态码匹配。
 func (s *GatewayService) sseStreamErrorEventFailover(ctx context.Context, c *gin.Context, account *Account, resp *http.Response, rawData, model string, outputStarted bool) *UpstreamFailoverError {
 	body := []byte(rawData)
 	semanticStatus := http.StatusForbidden
-	if !outputStarted && gjson.GetBytes(body, "error.type").String() == "overloaded_error" {
+	errorType := gjson.GetBytes(body, "error.type").String()
+	if errorType == "stream_incomplete" {
+		semanticStatus = http.StatusBadGateway
+	}
+	if !outputStarted && errorType == "overloaded_error" {
 		semanticStatus = 529
 		syntheticResp := &http.Response{
 			StatusCode: semanticStatus,
@@ -1105,9 +1193,8 @@ func (s *GatewayService) sseStreamErrorEventFailover(ctx context.Context, c *gin
 	})
 
 	logger.LegacyPrintf("service.gateway",
-		"[Forward] SSE error event in stream: Account=%d(%s) RequestID=%s Body=%s",
-		account.ID, account.Name, resp.Header.Get("x-request-id"),
-		truncateString(rawData, 1000),
+		"[Forward] SSE error event in stream: account_id=%d request_id=%s status=%d output_started=%t",
+		account.ID, resp.Header.Get("x-request-id"), semanticStatus, outputStarted,
 	)
 
 	return &UpstreamFailoverError{

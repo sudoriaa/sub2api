@@ -21,6 +21,11 @@ import (
 // ChatCompletions handles OpenAI Chat Completions API requests.
 // POST /v1/chat/completions
 func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
+	if c.GetHeader("X-Image-Usage") != "" {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "X-Image-Usage is supported only by /v1/images/generations and /v1/images/edits")
+		return
+	}
+
 	streamStarted := false
 	defer h.recoverResponsesPanic(c, &streamStarted)
 
@@ -121,6 +126,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	// 解析渠道级模型映射
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
 	forwardModel := openAIChannelForwardModel(channelMapping, reqModel)
+	c.Request = c.Request.WithContext(service.WithGatewayOpenAISelection(c.Request.Context(), reqModel, reqModel))
 	c.Request = c.Request.WithContext(service.WithOpenAIForwardModel(c.Request.Context(), forwardModel, false))
 
 	if h.errorPassthroughService != nil {
@@ -397,6 +403,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					if failoverErr.RetryableOnSameAccount {
 						retryLimit := effectiveSameAccountRetryLimit(failoverErr, account)
 						if sameAccountRetryAllowed(failoverErr, sameAccountRetryCount[account.ID], retryLimit) {
+							c.Request = c.Request.WithContext(service.WithOpenAISameAccountRetry(c.Request.Context(), account.ID, failoverErr))
 							sameAccountRetryCount[account.ID]++
 							retryDelay := sameAccountRetryDelayFor(failoverErr, sameAccountRetryCount[account.ID])
 							reqLog.Warn("openai_chat_completions.pool_mode_same_account_retry",
@@ -414,6 +421,11 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 							continue
 						}
 					}
+					if failoverErr.SameAccountRetryOnly() {
+						h.handleFailoverExhausted(c, failoverErr, streamStarted)
+						return
+					}
+					c.Request = c.Request.WithContext(service.WithOpenAISameAccountRetry(c.Request.Context(), 0, nil))
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr

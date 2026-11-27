@@ -14,10 +14,13 @@ import (
 )
 
 type usageBillingRepository struct {
-	db *sql.DB
+	db           *sql.DB
+	admission    billingAdmission
+	stagedLanes  stagedBillingLanes
+	recoveryScan usageBillingRecoveryScan
 }
 
-func NewUsageBillingRepository(_ *dbent.Client, sqlDB *sql.DB) service.UsageBillingRepository {
+func NewUsageBillingRepository(_ *dbent.Client, sqlDB *sql.DB) service.UsageBillingBatchRepository {
 	return &usageBillingRepository{db: sqlDB}
 }
 
@@ -34,37 +37,81 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 		return nil, service.ErrUsageBillingRequestIDRequired
 	}
 
+	result, _, err := r.applyWithUsage(ctx, cmd, nil)
+	return result, err
+}
+
+// ApplyUsage settles a gateway request through the upstream deduplication tables.
+// The canonical usage row is committed with the debit so synchronous receipts
+// and retries observe the same amount, including after a lost response.
+func (r *usageBillingRepository) ApplyUsage(ctx context.Context, cmd *service.UsageBillingCommand, usage *service.UsageLog) (*service.UsageBillingRecovery, error) {
+	if cmd == nil || usage == nil || r == nil || r.db == nil {
+		return nil, service.ErrUsageBillingRequestConflict
+	}
+	cmd.Normalize()
+	if cmd.RequestID == "" || cmd.RequestID != usage.RequestID || cmd.APIKeyID != usage.APIKeyID ||
+		cmd.AccountID != usage.AccountID || cmd.UserID != usage.UserID {
+		return nil, service.ErrUsageBillingRequestConflict
+	}
+	release, err := r.admission.acquireSQL(ctx, r.db.Stats().MaxOpenConnections)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	result, canonical, err := r.applyWithUsage(ctx, cmd, usage)
+	if err != nil {
+		return nil, err
+	}
+	out := &service.UsageBillingRecovery{Result: *result, Settled: canonical != nil}
+	if canonical != nil {
+		out.Event = service.UsageBillingEvent{Command: *cmd, Usage: *canonical}
+	}
+	return out, nil
+}
+
+func (r *usageBillingRepository) applyWithUsage(ctx context.Context, cmd *service.UsageBillingCommand, usage *service.UsageLog) (*service.UsageBillingApplyResult, *service.UsageLog, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	defer func() {
-		if tx != nil {
-			_ = tx.Rollback()
-		}
-	}()
-
+	defer func() { _ = tx.Rollback() }()
 	applied, err := r.claimUsageBillingKey(ctx, tx, cmd)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	result := &service.UsageBillingApplyResult{Applied: applied}
 	if !applied {
-		return &service.UsageBillingApplyResult{Applied: false}, nil
+		if usage == nil {
+			return result, nil, nil
+		}
+		canonical, err := scanUsageLog(tx.QueryRowContext(ctx, "SELECT "+usageLogSelectColumns+" FROM usage_logs WHERE request_id=$1 AND api_key_id=$2 AND user_id=$3", cmd.RequestID, cmd.APIKeyID, cmd.UserID))
+		if errors.Is(err, sql.ErrNoRows) {
+			return result, nil, nil
+		}
+		return result, canonical, err
 	}
-
-	result := &service.UsageBillingApplyResult{Applied: true}
 	if err := r.applyUsageBillingEffects(ctx, tx, cmd, result); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := insertUsageBillingQuote(ctx, tx, cmd); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-
+	if usage != nil {
+		canonical := *usage
+		logs := usageLogRepository{sql: tx}
+		inserted, err := logs.createSingle(ctx, tx, &canonical)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !inserted {
+			return nil, nil, service.ErrUsageBillingRequestConflict
+		}
+		usage = &canonical
+	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	tx = nil
-	return result, nil
+	return result, usage, nil
 }
 
 func insertUsageBillingQuote(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand) error {
@@ -80,9 +127,15 @@ func insertUsageBillingQuote(ctx context.Context, tx *sql.Tx, cmd *service.Usage
 	// of the quote (and independently of AccountQuotaCost's upstream cost basis).
 	quoted := strconv.FormatFloat(*cmd.QuotedActualCost, 'f', -1, 64)
 	canonical := max(cmd.BalanceCost, cmd.SubscriptionCost, cmd.APIKeyQuotaCost, cmd.APIKeyRateLimitCost)
+	// Both callers have already applied the normalized command's effects in tx.
+	// Quota-only, subscription and legacy quotes carry no wallet-debit evidence.
+	var payer, debit any
+	if cmd.BalanceCost > 0 {
+		payer, debit = cmd.UserID, cmd.BalanceCost
+	}
 	_, err := tx.ExecContext(ctx, `INSERT INTO usage_billing_quotes
-		(request_id,api_key_id,request_fingerprint,quoted_actual_cost,canonical_actual_cost,quote_encoding_version)
-		VALUES($1,$2,$3,$4::numeric,$5,1)`, cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint, quoted, canonical)
+		(request_id,api_key_id,request_fingerprint,quoted_actual_cost,canonical_actual_cost,quote_encoding_version,debited_user_id,wallet_debit)
+		VALUES($1,$2,$3,$4::numeric,$5,1,$6,$7)`, cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint, quoted, canonical, payer, debit)
 	return err
 }
 
@@ -472,9 +525,9 @@ func userExistsForBilling(ctx context.Context, tx *sql.Tx, userID int64) (bool, 
 	return true, nil
 }
 
-func incrementUsageBillingAPIKeyQuota(ctx context.Context, tx *sql.Tx, apiKeyID int64, amount float64) (bool, error) {
-	var exhausted bool
-	err := tx.QueryRowContext(ctx, `
+// usageBillingAPIKeyQuotaUpdate 累加 Key 已用额度（$1），本次累加从未达额度跨到达到额度时把 active 状态置为额度耗尽。
+// 参数：$1=金额 $2=api_key_id $3=active 状态 $4=额度耗尽状态。
+const usageBillingAPIKeyQuotaUpdate = `
 		UPDATE api_keys
 		SET quota_used = quota_used + $1,
 			status = CASE
@@ -486,7 +539,11 @@ func incrementUsageBillingAPIKeyQuota(ctx context.Context, tx *sql.Tx, apiKeyID 
 				ELSE status
 			END,
 			updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL
+		WHERE id = $2 AND deleted_at IS NULL`
+
+func incrementUsageBillingAPIKeyQuota(ctx context.Context, tx *sql.Tx, apiKeyID int64, amount float64) (bool, error) {
+	var exhausted bool
+	err := tx.QueryRowContext(ctx, usageBillingAPIKeyQuotaUpdate+`
 		RETURNING quota > 0 AND quota_used >= quota AND quota_used - $1 < quota
 	`, amount, apiKeyID, service.StatusAPIKeyActive, service.StatusAPIKeyQuotaExhausted).Scan(&exhausted)
 	if errors.Is(err, sql.ErrNoRows) {

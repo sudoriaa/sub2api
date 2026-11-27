@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
@@ -182,7 +181,8 @@ type Group struct {
 type AdminGroup struct {
 	Group
 	// ForceOpenAIFast 是管理端请求策略，用户侧分组 DTO 无需暴露。
-	ForceOpenAIFast bool `json:"force_openai_fast"`
+	ForceOpenAIUltrafast bool `json:"force_openai_ultrafast"`
+	ForceOpenAIFast      bool `json:"force_openai_fast"`
 	// FreeOpenAIFast/FreeOpenAIUltrafast 是独立的管理端计费策略，用户侧分组 DTO 无需暴露。
 	FreeOpenAIFast      bool `json:"free_openai_fast"`
 	FreeOpenAIUltrafast bool `json:"free_openai_ultrafast"`
@@ -622,14 +622,13 @@ type BatchUpdateRedeemCodesRequest struct {
 
 // UsageLog 是普通用户接口使用的 usage log DTO（不包含管理员字段）。
 type UsageLog struct {
-	CustomerCostDetails *service.CustomerCostDetails      `json:"customer_cost_details,omitempty"`
-	ContentTiming       *requesttiming.ContentObservation `json:"content_timing,omitempty"`
-	ID                  int64                             `json:"id"`
-	UserID              int64                             `json:"user_id"`
-	APIKeyID            int64                             `json:"api_key_id"`
-	AccountID           int64                             `json:"account_id"`
-	RequestID           string                            `json:"request_id"`
-	Model               string                            `json:"model"`
+	CustomerCostDetails *service.CustomerCostDetails `json:"customer_cost_details,omitempty"`
+	ID                  int64                        `json:"id"`
+	UserID              int64                        `json:"user_id"`
+	APIKeyID            int64                        `json:"api_key_id"`
+	AccountID           int64                        `json:"account_id"`
+	RequestID           string                       `json:"request_id"`
+	Model               string                       `json:"model"`
 	// ServiceTier records the OpenAI service tier used for billing, e.g. "priority" / "flex".
 	ServiceTier *string `json:"service_tier,omitempty"`
 	// ReasoningEffort is the client-requested effort (mapping-hidden, like Model).
@@ -745,6 +744,8 @@ type AdminUsageLog struct {
 	AccountRateMultiplier *float64 `json:"account_rate_multiplier"`
 	// AccountStatsCost 自定义定价规则计算的账号统计费用（nil 表示使用默认公式）
 	AccountStatsCost *float64 `json:"account_stats_cost,omitempty"`
+	// ProcurementCostSnapshot follows existing admin/authorized observer cost scope.
+	ProcurementCostSnapshot *service.ProcurementCostSnapshot `json:"procurement_cost_snapshot,omitempty"`
 
 	// IPAddress 用户请求 IP
 	IPAddress *string `json:"ip_address,omitempty"`

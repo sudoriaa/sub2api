@@ -6,40 +6,223 @@ import { nextDifferentNominal, questionAt, bankVersion } from './pelican-nominal
 const unwrap = value => value?.data ?? value
 const pause = () => new Promise(resolve => setTimeout(resolve, 250))
 
+// Metadata only: no routing, browser evaluation, timers, bodies or headers.
+// Scope is the observed auth request plus this fixture's document routes.
+export function createBrowserLifecycleMetadata(page, readContext, { now = () => performance.now() } = {}) {
+  const paths = new Set(['/login', '/admin/accounts', '/admin/pelican-tests', '/api/v1/auth/me'])
+  const stages = new Set(['browser-startup', 'normal-authentication', 'manual-same-round-a-b-two-samples',
+    'manual-next-round-identity', 'manual-localstorage-reload-history-dom', 'disabled-group-plan-real-ui-api-pg',
+    'account-scheduled-ui-create-a-b', 'account-scheduled-nominal-time-and-real-claim',
+    'account-scheduled-pg-provider-reconciliation', 'account-scheduled-history-detail-dom',
+    'group-scheduled-ui-enable', 'group-scheduled-due-and-real-claim',
+    'group-scheduled-pg-provider-reconciliation', 'group-scheduled-list-detail-dom',
+    'complete-scheduled-rounds', 'post-bootstrap-browser-and-provider-error-lists'])
+  const gates = new Set(['second-nominal-account', 'second-nominal-group', 'deterministic-refusal-account',
+    'deterministic-refusal-group', 'after-refusal-valid-round-account', 'after-refusal-valid-round-group',
+    'ui-edit-account-custom', 'ui-edit-account-random', 'ui-edit-group-custom', 'ui-edit-group-random', 'edited-old-snapshots'])
+  const safePath = raw => {
+    try {
+      const url = new URL(raw)
+      return url.origin === 'http://app:8080' && paths.has(url.pathname) ? url.pathname : null
+    } catch { return null }
+  }
+  const requests = new WeakMap()
+  const events = []
+  const maxEvents = 8192
+  const started = now()
+  const time = () => Math.round((now() - started) * 1000) / 1000
+  let sequence = 0, requestID = 0, navigationID = 0, documentID = 0, nextDocumentID = 0, dropped = 0
+  let documentRequest
+  const scope = () => {
+    const { stage, active_gate } = readContext()
+    return { stage: stages.has(stage) ? stage : 'unlisted', active_gate: gates.has(active_gate) ? active_gate : null }
+  }
+  const record = (event, fields, at = time()) => {
+    if (events.length === maxEvents) { events.shift(); dropped++ }
+    events.push({ sequence: ++sequence, at_ms: at, event, ...scope(), ...fields })
+  }
+  page.on('request', request => {
+    const path = safePath(request.url())
+    if (!path) return
+    const method = request.method()
+    let mainFrame = null
+    // Playwright may not have attached a frame yet for an early document
+    // request. Unknown metadata must not interrupt the original scenario.
+    try { mainFrame = request.frame() === page.mainFrame() } catch { /* keep unknown */ }
+    const documentNavigation = mainFrame === true && request.isNavigationRequest()
+    const context = scope()
+    const data = { request_id: ++requestID, method: ['GET', 'POST'].includes(method) ? method : 'unlisted', path,
+      main_frame: mainFrame, is_navigation_request: documentNavigation, navigation_id: navigationID,
+      document_id: documentID, requested_document_id: documentNavigation ? ++nextDocumentID : null,
+      start_ms: time(), start_stage: context.stage, start_gate: context.active_gate }
+    requests.set(request, data)
+    if (documentNavigation) documentRequest = data
+    record('request-start', data, data.start_ms)
+  })
+  const complete = (request, event) => {
+    const data = requests.get(request)
+    if (!data || data.end_ms !== undefined) return
+    Object.assign(data, { end_ms: time(), end_event: event, end_document_id: documentID, end_navigation_id: navigationID })
+    record(event, { ...data }, data.end_ms)
+    if (event === 'request-failed' && documentRequest === data) documentRequest = undefined
+  }
+  page.on('requestfinished', request => complete(request, 'request-finished'))
+  page.on('requestfailed', request => complete(request, 'request-failed'))
+  page.on('framenavigated', frame => {
+    if (frame !== page.mainFrame()) return
+    const path = safePath(frame.url())
+    if (!path) return
+    // Same-document router navigation also emits framenavigated. Only a
+    // matching main-document request establishes a new document identity.
+    const committed = documentRequest?.path === path ? documentRequest : undefined
+    if (committed) { documentID = committed.requested_document_id; documentRequest = undefined }
+    record(committed ? 'document-commit' : 'frame-navigation', { path, document_id: documentID,
+      navigation_id: navigationID, request_id: committed?.request_id ?? null })
+  })
+  return {
+    documentIntervalsRetired(count) {
+      assert.ok(Number.isSafeInteger(count) && count >= 0)
+      record('document-intervals-retired', { document_id: documentID, navigation_id: navigationID, intervals: count })
+    },
+    navigationIntent(action, url) {
+      const path = safePath(url)
+      if (!['goto', 'reload'].includes(action) || !path) return
+      record('navigation-intent', { action, path, navigation_id: ++navigationID, document_id: documentID })
+    },
+    requestMetadata(request) { const data = requests.get(request); return data ? { ...data } : null },
+    snapshot() { return { version: 1, clock: 'harness monotonic milliseconds since collector start',
+      max_events: maxEvents, dropped_events: dropped, paths: [...paths], events: events.map(event => ({ ...event })) } },
+  }
+}
+
+// Serialized by Playwright into each main document before application scripts.
+// Stop future recurring work only when the harness is about to discard that
+// document. Native callbacks, existing fetch/XHR, timeouts and their errors are
+// untouched. A fresh document gets a fresh registry with normal scheduling.
+function installDocumentIntervals() {
+  if (globalThis.top && globalThis.top !== globalThis) return
+  if (Object.hasOwn(globalThis, '__pelicanDocumentIntervals')) return
+  const intervals = new Set()
+  const nativeSet = globalThis.setInterval
+  const nativeClear = globalThis.clearInterval
+  const nativeClearTimeout = globalThis.clearTimeout
+  let retired = false
+  globalThis.setInterval = function (...args) {
+    const id = Reflect.apply(nativeSet, globalThis, args)
+    if (retired) Reflect.apply(nativeClear, globalThis, [id])
+    else intervals.add(id)
+    return id
+  }
+  globalThis.clearInterval = function (id) {
+    intervals.delete(id)
+    return Reflect.apply(nativeClear, globalThis, [id])
+  }
+  // Browser timer IDs share a pool: clearTimeout can cancel an interval too.
+  globalThis.clearTimeout = function (id) {
+    intervals.delete(id)
+    return Reflect.apply(nativeClearTimeout, globalThis, [id])
+  }
+  Object.defineProperty(globalThis, '__pelicanDocumentIntervals', { value: Object.freeze({
+    retire() {
+      if (retired) throw new Error('cannot reuse a retired document for navigation')
+      retired = true
+      const count = intervals.size
+      for (const id of intervals) Reflect.apply(nativeClear, globalThis, [id])
+      intervals.clear()
+      return count
+    },
+  }) })
+}
+
+function retireDocumentIntervals() {
+  if (!Object.hasOwn(globalThis, '__pelicanDocumentIntervals')) throw new Error('document interval boundary was not installed')
+  return globalThis.__pelicanDocumentIntervals.retire()
+}
+
 // Track real request completion across repeated document navigations. A
 // previously reached lifecycle state alone cannot prevent a later auth/settings
 // request from being aborted by the harness. Failures remain in the caller's
 // strict requestfailed inventory; this barrier never filters or retries them.
-export function createPageNavigation(page) {
+export function createPageNavigation(page, { waitForBootstrap = () => Promise.resolve(), lifecycle } = {}) {
   const pending = new Set()
   const waiters = new Set()
-  page.on('request', request => pending.add(request))
+  let activity = 0
+  page.on('request', request => { activity++; pending.add(request) })
   const completed = request => {
+    activity++
     pending.delete(request)
     if (!pending.size) for (const resolve of [...waiters]) resolve()
   }
   page.on('requestfinished', completed)
   page.on('requestfailed', completed)
-  const settle = async () => {
+  let installed
+  const install = () => installed ??= (async () => {
+    await page.addInitScript(installDocumentIntervals)
+    // The initial about:blank document predates addInitScript.
+    await page.evaluate(installDocumentIntervals)
+  })()
+  const settle = async (retire = false) => {
     const deadline = Date.now() + 20_000
+    const remaining = () => {
+      const ms = deadline - Date.now()
+      if (ms <= 0) throw new Error('browser requests did not finish before navigation')
+      return ms
+    }
+    const bounded = async operation => {
+      const ms = remaining()
+      let timer
+      try {
+        return await Promise.race([operation(), new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('browser requests did not finish before navigation')), ms)
+        })])
+      } finally { clearTimeout(timer) }
+    }
+    if (retire) await bounded(install)
     // A completed background fetch followed by a srcdoc preview lifecycle can
     // remove networkidle without restarting its timer (Playwright 1.56.1).
     // Document load + our real completion inventory does not depend on that
     // stale frame flag. Keep one 20s deadline, including document readiness.
-    await page.waitForLoadState('load', { timeout: 20_000 })
-    while (pending.size) await new Promise((resolve, reject) => {
-      const done = () => { clearTimeout(timer); waiters.delete(done); resolve() }
-      const timer = setTimeout(() => {
-        waiters.delete(done)
-        reject(new Error('browser requests did not finish before navigation'))
-      }, Math.max(0, deadline - Date.now()))
-      waiters.add(done)
-    })
+    await page.waitForLoadState('load', { timeout: remaining() })
+    if (retire) {
+      // Atomic in the old document: an interval either ran before this fence
+      // (its requests must drain below), or cannot fire in the intent/commit gap.
+      const count = await bounded(() => page.evaluate(retireDocumentIntervals))
+      lifecycle?.documentIntervalsRetired?.(count)
+    }
+    for (;;) {
+      while (pending.size) await new Promise((resolve, reject) => {
+        const done = () => { clearTimeout(timer); waiters.delete(done); resolve() }
+        const timer = setTimeout(() => {
+          waiters.delete(done)
+          reject(new Error('browser requests did not finish before navigation'))
+        }, Math.max(0, deadline - Date.now()))
+        waiters.add(done)
+      })
+      // load can fire before Vue schedules its auth refresh. Observe a quiet
+      // interval after draining, so that deferred requests cannot be aborted
+      // by the next document navigation. Keep the original total deadline.
+      const ms = remaining()
+      const observed = activity
+      await new Promise(resolve => setTimeout(resolve, Math.min(250, ms)))
+      if (!pending.size && activity === observed) return
+    }
   }
   return {
-    settle,
-    async goto(url) { await settle(); await page.goto(url, { waitUntil: 'load' }); await settle() },
-    async reload() { await settle(); await page.reload({ waitUntil: 'load' }); await settle() },
+    settle: () => settle(),
+    async goto(url, beforeNavigate = () => {}) {
+      await settle(true)
+      beforeNavigate()
+      lifecycle?.navigationIntent('goto', url)
+      await Promise.all([waitForBootstrap(url), page.goto(url, { waitUntil: 'load' })])
+      await settle()
+    },
+    async reload(beforeNavigate = () => {}) {
+      await settle(true)
+      beforeNavigate()
+      lifecycle?.navigationIntent('reload', page.url?.())
+      await Promise.all([waitForBootstrap(page.url?.()), page.reload({ waitUntil: 'load' })])
+      await settle()
+    },
   }
 }
 
@@ -129,9 +312,13 @@ export async function completeScheduledRounds(c) {
   }
 
   async function groupHistory(label, expected) {
-    const listed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/admin/pelican-group-test-results'
-      && response.request().method() === 'GET' && response.status() === 200)
-    await navigation.goto(`${origin}/admin/pelican-tests`)
+    // Arm after old-document polling has drained. Its response body disappears
+    // on navigation and must never stand in for the destination's history.
+    let listed
+    await navigation.goto(`${origin}/admin/pelican-tests`, () => {
+      listed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/admin/pelican-group-test-results'
+        && response.request().method() === 'GET' && response.status() === 200)
+    })
     const response = await listed
     const list = unwrap(await response.json())
     assert.equal(list.total, expected.length)
@@ -381,10 +568,11 @@ export async function completeScheduledRounds(c) {
     const stored = await readGroupPlan()
     assert.deepEqual(stored.pelican_config, body.pelican_config)
     await form.waitFor({ state: 'hidden' })
-    await navigation.settle()
-    const listRead = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/admin/pelican-group-tests'
-      && response.request().method() === 'GET')
-    await navigation.reload()
+    let listRead
+    await navigation.reload(() => {
+      listRead = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/admin/pelican-group-tests'
+        && response.request().method() === 'GET')
+    })
     const listResponse = await listRead
     assert.equal(listResponse.status(), 200)
     const list = unwrap(await listResponse.json())

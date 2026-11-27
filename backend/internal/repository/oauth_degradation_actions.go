@@ -53,6 +53,17 @@ func (r *accountRepository) OAuthDegradationIDs(ctx context.Context, after int64
 }
 
 func (r *accountRepository) EvaluateOAuthDegradation(ctx context.Context, id int64, now time.Time) error {
+	return r.evaluateOAuthDegradation(ctx, id, now, nil)
+}
+
+// A review with no revision requests permission to probe. Confirmed retests
+// must use the same lease and configuration revision.
+func (r *accountRepository) ReviewOAuthDegradationCandy(ctx context.Context, id int64, review service.OAuthDegradationCandyReview) (string, error) {
+	err := r.evaluateOAuthDegradation(ctx, id, time.Now().UTC(), &review)
+	return review.Revision, err
+}
+
+func (r *accountRepository) evaluateOAuthDegradation(ctx context.Context, id int64, now time.Time, review *service.OAuthDegradationCandyReview) error {
 	db, ok := r.sql.(*sql.DB)
 	if !ok {
 		return errors.New("OAuth degradation requires transactional database")
@@ -82,6 +93,23 @@ func (r *accountRepository) EvaluateOAuthDegradation(ctx context.Context, id int
 	if !c.DegradationAction.Enabled {
 		return nil
 	}
+	if review != nil {
+		// Quality actions lock their plan before locking the account.
+		var planID int64
+		err = tx.QueryRowContext(ctx, `SELECT id FROM scheduled_test_plans WHERE id=$1 AND account_id=$2
+ AND enabled AND updated_at=$3 AND running_until=$4 AND running_until>clock_timestamp()
+ AND EXISTS (SELECT 1 FROM scheduled_test_results WHERE plan_id=$1 AND quality_round_id=$5
+ AND pelican_config->>'model_id'=$6 AND status='failed' AND
+ ((error_message='answer_mismatch' AND quality_judgment->>'verdict'='incorrect') OR
+ (pelican_config @> '{"quality_429_streak":3,"quality_http_status":429}' AND pelican_config->'quality'->>'action'<>'observe_only')))
+ FOR SHARE`, review.PlanID, id, review.PlanUpdatedAt, review.LeaseUntil, review.LeaseUntil.Format(time.RFC3339Nano), review.ModelID).Scan(&planID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
 	a := service.Account{ID: id}
 	var credentials, extra []byte
 	err = tx.QueryRowContext(ctx, `SELECT name,platform,type,concurrency,schedulable,credentials,COALESCE(extra,'{}'::jsonb) FROM accounts WHERE id=$1 AND deleted_at IS NULL AND parent_account_id IS NULL AND type='oauth' FOR UPDATE`, id).Scan(&a.Name, &a.Platform, &a.Type, &a.Concurrency, &a.Schedulable, &credentials, &extra)
@@ -107,10 +135,47 @@ func (r *accountRepository) EvaluateOAuthDegradation(ctx context.Context, id int
 		return err
 	}
 	m, found := metrics[id]
-	reason := c.DegradationAction.TriggerReason(m)
-	if !found || reason == "" {
+	if !found {
 		return nil
 	}
+	// The independent 429 worker confirms its own evidence before applying this policy.
+	reason := ""
+	if reason == "" && review != nil && c.DegradationAction.NeedsCandyRetest(m) &&
+		!review.StartedAt.Before(m.WindowStart) && now.Before(review.LeaseUntil) {
+		if review.Incorrect == 0 && review.RateLimited == 0 {
+			review.Revision = c.Revision
+			return nil
+		}
+		if review.Confirmed() && review.Revision != "" && review.Revision == c.Revision {
+			reason = service.OAuthDegradationCandyRetested
+		}
+	}
+	if reason == "" {
+		return nil
+	}
+	state := service.OAuthDegradationState{TriggerReason: reason, QualitySamples: m.QualitySamples, WindowStart: m.WindowStart, WindowEnd: m.WindowEnd, AppliedAt: now}
+	if c.DegradationAction.ThresholdPercent != nil {
+		state.ThresholdPercent = *c.DegradationAction.ThresholdPercent
+	}
+	if m.DegradationPercent != nil {
+		state.DegradationPercent = *m.DegradationPercent
+	}
+	if reason == service.OAuthDegradationCandyRetested {
+		state.CandyReview = review
+	}
+	if err = applyOAuthDegradation(ctx, tx, c, &a, state); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	r.syncSchedulerAccountSnapshotDetached(ctx, id)
+	return nil
+}
+
+// Both confirmation paths hold the live policy and account locks in this transaction.
+func applyOAuthDegradation(ctx context.Context, tx *sql.Tx, c service.OAuthAutoConfig, a *service.Account, state service.OAuthDegradationState) error {
+	id := a.ID
 	models := make([]string, 0, len(c.DegradationAction.Models))
 	mapping := make(map[string]any)
 	nativeSchedulingPaused := false
@@ -174,19 +239,12 @@ func (r *accountRepository) EvaluateOAuthDegradation(ctx context.Context, id int
 		next = min(next, c.DegradationAction.TargetConcurrency)
 	}
 	limitConcurrency, limitModels := c.DegradationAction.RestrictsConcurrency(), c.DegradationAction.RestrictsModels()
-	state := service.OAuthDegradationState{NativeControls: true, NativeSchedulingPaused: nativeSchedulingPaused, LimitConcurrency: &limitConcurrency, LimitModels: &limitModels, LimitGroups: c.DegradationAction.LimitGroups, GroupIDs: append([]int64{}, c.DegradationAction.GroupIDs...), RemovedGroupIDs: removedGroups, Revision: c.Revision, Models: models, ConcurrencyCap: next, QualitySamples: m.QualitySamples, WindowStart: m.WindowStart, WindowEnd: m.WindowEnd, AppliedAt: now}
-	state.TriggerReason = reason
-	if c.DegradationAction.ThresholdPercent != nil {
-		state.ThresholdPercent = *c.DegradationAction.ThresholdPercent
-	}
-	if m.DegradationPercent != nil {
-		state.DegradationPercent = *m.DegradationPercent
-	}
-	if reason == "upstream_429" {
-		state.UpstreamError = &m.UpstreamError
-		state.UpstreamErrorThresholdPercent = c.DegradationAction.HTTPErrorThreshold()
-		state.Upstream429ShareThresholdPercent = c.DegradationAction.HTTP429ShareThreshold()
-	}
+	state.NativeControls = true
+	state.NativeSchedulingPaused = nativeSchedulingPaused
+	state.LimitConcurrency, state.LimitModels = &limitConcurrency, &limitModels
+	state.LimitGroups = c.DegradationAction.LimitGroups
+	state.GroupIDs, state.RemovedGroupIDs = c.DegradationAction.GroupIDs, removedGroups
+	state.Models, state.ConcurrencyCap, state.Revision = models, next, c.Revision
 
 	if a.Extra == nil {
 		a.Extra = make(map[string]any)
@@ -220,9 +278,5 @@ func (r *accountRepository) EvaluateOAuthDegradation(ctx context.Context, id int
 	if err = insertAutoConfigEvent(ctx, tx, service.AutoConfigEvent{AccountID: id, AccountName: a.Name, Platform: a.Platform, Kind: service.AutoConfigEventDegradation, Details: service.AutoConfigEventDetails{PreviousConcurrency: a.Concurrency, Concurrency: next, Degradation: &state}}); err != nil {
 		return err
 	}
-	if err = tx.Commit(); err != nil {
-		return err
-	}
-	r.syncSchedulerAccountSnapshotDetached(ctx, id)
 	return nil
 }

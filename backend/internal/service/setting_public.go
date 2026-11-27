@@ -570,9 +570,11 @@ func (s *SettingService) GetAvailableChannelsRuntime(ctx context.Context) Availa
 // ModelPlazaRuntime is the lightweight view of the model-plaza feature consumed
 // by the public plaza handler.
 type ModelPlazaRuntime struct {
-	Enabled     bool
-	RequireAuth bool
-	Description string
+	Enabled      bool
+	RequireAuth  bool
+	Description  string
+	USDToCNYRate float64
+	Currency     ModelPlazaCurrencySettings
 }
 
 // GetModelPlazaRuntime reads the model-plaza feature switches directly from the
@@ -583,14 +585,18 @@ func (s *SettingService) GetModelPlazaRuntime(ctx context.Context) ModelPlazaRun
 		SettingKeyModelPlazaEnabled,
 		SettingKeyModelPlazaRequireAuth,
 		SettingKeyModelPlazaDescription,
+		SettingKeyModelPlazaUSDToCNYRate,
+		SettingKeyModelPlazaCurrency,
 	})
 	if err != nil {
 		return ModelPlazaRuntime{Enabled: false}
 	}
 	return ModelPlazaRuntime{
-		Enabled:     vals[SettingKeyModelPlazaEnabled] == "true",
-		RequireAuth: vals[SettingKeyModelPlazaRequireAuth] == "true",
-		Description: vals[SettingKeyModelPlazaDescription],
+		Enabled:      vals[SettingKeyModelPlazaEnabled] == "true",
+		RequireAuth:  vals[SettingKeyModelPlazaRequireAuth] == "true",
+		Description:  vals[SettingKeyModelPlazaDescription],
+		USDToCNYRate: modelPlazaUSDToCNYRate(vals[SettingKeyModelPlazaUSDToCNYRate]),
+		Currency:     parseModelPlazaCurrency(vals[SettingKeyModelPlazaCurrency]),
 	}
 }
 
@@ -618,6 +624,14 @@ func (s *SettingService) IsUserUpstreamResponseModelVisible(ctx context.Context)
 		return false
 	}
 	return vals[SettingKeyUsageShowUpstreamResponseModelToUsers] == "true"
+}
+
+func (s *SettingService) IsUserUsageCacheRateVisible(ctx context.Context) bool {
+	if s == nil || s.settingRepo == nil {
+		return false
+	}
+	vals, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyUsageShowCacheRate, SettingKeyUsageShowCacheRateToUsers})
+	return err == nil && vals[SettingKeyUsageShowCacheRate] != "false" && vals[SettingKeyUsageShowCacheRateToUsers] == "true"
 }
 
 // PublicSettingsInjectionPayload is the JSON shape embedded into HTML as

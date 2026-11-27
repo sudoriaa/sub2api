@@ -136,6 +136,7 @@ vite.config.js
 user-traffic-pending/
 docs/*
 !docs/antigravity-deepseek-harness.md
+!docs/account-platform-edit.md
 !docs/openai-totp-factor-recovery.md
 !docs/ai-ops-codex.md
 !docs/reauth-identity-validation.md
@@ -144,7 +145,7 @@ docs/*
 !docs/encrypted-agent-owner-policy.md
 !docs/stream-timing.md
 !docs/openai-sse-delivery.md
-!docs/user-traffic.md
+!docs/usage-records-api.md
 !docs/typesafe-content-audit.md
 !docs/multi-host-session-owner.md
 !docs/security-penalties.md
@@ -252,3 +253,5 @@ tools/local-worker/
 
 !docs/free-ultrafast-billing.md
 !/.github/scripts/free-ultrafast-browser.mjs
+
+!docs/smart-ops-retirement.md

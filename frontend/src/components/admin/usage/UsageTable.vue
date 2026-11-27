@@ -3,10 +3,6 @@
 	<div v-if="enableContentDetails && !observerMode" class="border-b border-gray-200 px-4 py-2 text-xs text-gray-500 dark:border-dark-700 dark:text-gray-400">
 	  {{ t('usageContent.retentionNote') }}
 	</div>
-    <div v-if="enableTimingDetails && noticeUserId != null && !observerMode" class="flex items-center gap-2 border-b border-gray-200 px-4 py-2 text-xs text-gray-500 dark:border-dark-700 dark:text-gray-400">
-      <span>{{ t('requestTiming.contentTitle') }}</span>
-      <NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.streamFirstEventTiming" :user-id="noticeUserId" />
-    </div>
     <div
       v-if="showIpGeoToolbar"
       class="flex items-center justify-end gap-2 border-b border-gray-200 px-4 py-2 dark:border-dark-700"
@@ -246,7 +242,7 @@
 
         <!-- TPS health coloring can be omitted without changing the other latency indicators. -->
         <template #cell-latency="{ row }">
-          <component :is="enableTimingDetails ? 'button' : 'div'" :type="enableTimingDetails ? 'button' : undefined" class="grid grid-cols-[0.25rem_max-content_max-content] items-baseline gap-x-2 gap-y-0.5 text-left text-xs" :class="enableTimingDetails ? 'hover:opacity-80 focus-visible:outline focus-visible:outline-primary-500' : ''" :aria-label="enableTimingDetails ? t('requestTiming.title') : undefined" @click="enableTimingDetails && (timingRecord = row)">
+          <div class="grid grid-cols-[0.25rem_max-content_max-content] items-baseline gap-x-2 gap-y-0.5 text-left text-xs">
             <span
               data-testid="latency-bar"
               class="col-start-1 row-start-1 w-1 self-stretch rounded-full"
@@ -254,13 +250,13 @@
               :style="cacheRateBarStyle(row)"
               aria-hidden="true"
             ></span>
-            <span class="col-start-2 row-start-1 text-gray-400 dark:text-gray-500">{{ t(enableTimingDetails ? 'usage.latencyFirstTokenShort' : row.queue_timing?.status === 'measured' ? 'usage.latencyFirstToken' : 'requestTiming.legacyFirst') }}</span>
-            <span v-if="firstTokenQueueInclusive(row) != null" class="col-start-3 row-start-1 font-medium tabular-nums" :class="LATENCY_TEXT_CLASSES[firstTokenSeverity(firstTokenQueueInclusive(row) ?? 0)]" :title="row.queue_timing?.status === 'measured' ? t('usage.latencyFirstTokenHint') : enableTimingDetails ? t('requestTiming.legacyFirst') : undefined">
+            <span class="col-start-2 row-start-1 text-gray-400 dark:text-gray-500">{{ t(row.queue_timing?.status === 'measured' ? 'usage.latencyFirstToken' : 'requestTiming.legacyFirst') }}</span>
+            <span v-if="firstTokenQueueInclusive(row) != null" class="col-start-3 row-start-1 font-medium tabular-nums" :class="LATENCY_TEXT_CLASSES[firstTokenSeverity(firstTokenQueueInclusive(row) ?? 0)]" :title="row.queue_timing?.status === 'measured' ? t('usage.latencyFirstTokenHint') : undefined">
               {{ formatDuration(firstTokenQueueInclusive(row)) }}
             </span>
-            <span v-else class="col-start-3 row-start-1 text-gray-400 dark:text-gray-500" :title="enableTimingDetails ? t('requestTiming.legacyFirst') : undefined">-</span>
-            <span class="col-start-2 row-start-2 text-gray-400 dark:text-gray-500">{{ t(enableTimingDetails ? 'usage.latencyDurationShort' : row.queue_timing?.status === 'measured' ? 'usage.latencyDuration' : 'requestTiming.legacyTotal') }}</span>
-            <span class="col-start-3 row-start-2 font-medium tabular-nums" :class="LATENCY_TEXT_CLASSES[durationSeverity(durationQueueInclusive(row) ?? 0)]" :title="row.queue_timing?.status === 'measured' ? t('usage.latencyDurationHint') : enableTimingDetails ? t('requestTiming.legacyTotal') : undefined">
+            <span v-else class="col-start-3 row-start-1 text-gray-400 dark:text-gray-500">-</span>
+            <span class="col-start-2 row-start-2 text-gray-400 dark:text-gray-500">{{ t(row.queue_timing?.status === 'measured' ? 'usage.latencyDuration' : 'requestTiming.legacyTotal') }}</span>
+            <span class="col-start-3 row-start-2 font-medium tabular-nums" :class="LATENCY_TEXT_CLASSES[durationSeverity(durationQueueInclusive(row) ?? 0)]" :title="row.queue_timing?.status === 'measured' ? t('usage.latencyDurationHint') : undefined">
               {{ formatDuration(durationQueueInclusive(row)) }}
             </span>
             <span class="col-start-2 row-start-3" :class="showTpsHealth ? 'text-gray-400 dark:text-gray-500' : 'text-black dark:text-gray-100'">{{ t('usage.latencyTps') }}</span>
@@ -283,7 +279,7 @@
               >{{ formatUsageCacheRate(row) }}</span>
               <span v-else data-testid="latency-cache-rate" class="col-start-3 row-start-4 text-gray-400 dark:text-gray-500">-</span>
             </template>
-          </component>
+          </div>
         </template>
 
         <template #cell-created_at="{ value }">
@@ -446,6 +442,10 @@
           <!-- Cost Breakdown -->
           <div class="mb-2 border-b border-gray-700 pb-1.5">
             <div class="text-xs font-semibold text-gray-300 mb-1">{{ t('usage.costDetails') }}</div>
+            <div v-if="tooltipData?.customer_cost_details?.probe_penalty" class="flex items-center justify-between gap-4" data-testid="probe-penalty-adjustment">
+              <span class="text-gray-400">{{ t('admin.accounts.probePenalty.adjustment') }}</span>
+              <span class="font-medium text-amber-300">${{ tooltipData.customer_cost_details.probe_penalty.adjustment.toFixed(8) }}</span>
+            </div>
             <div v-if="tooltipData && tooltipData.input_cost > 0" class="flex items-center justify-between gap-4">
               <span class="text-gray-400">{{ t('admin.usage.inputCost') }}</span>
               <span class="font-medium text-white">{{ customerAmount('input_cost') }}</span>
@@ -569,7 +569,6 @@
         </div>
       </div>
   </UsageDetailPopover>
-  <UsageTimingDialog :record="timingRecord" :notice-user-id="noticeUserId" @close="timingRecord = null" />
   <UsageContentDialog v-if="enableContentDetails && !observerMode" :record="contentRecord" @close="contentRecord = null" />
 </template>
 
@@ -578,10 +577,7 @@ import { computed, ref, inject, onUnmounted } from 'vue'
 import { useWindowSize } from '@vueuse/core'
 import UsageDetailPopover from './UsageDetailPopover.vue'
 import UsageApiKeyName from './UsageApiKeyName.vue'
-import UsageTimingDialog from './UsageTimingDialog.vue'
 import UsageContentDialog from './UsageContentDialog.vue'
-import NewFeatureBadge from '@/components/common/NewFeatureBadge.vue'
-import { NEW_FEATURE_NOTICES } from '@/constants/newFeatureNotices'
 import { observerUsageContext } from './observerUsageContext'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
@@ -650,11 +646,8 @@ interface Props {
   defaultSortKey?: string
   defaultSortOrder?: 'asc' | 'desc'
   showAccountBilling?: boolean
-  enableTimingDetails?: boolean
 	/** Admin only. User and observer tables must never load dialogue bodies. */
 	enableContentDetails?: boolean
-  /** Current admin ID for the shared feature notice; omitted on user/observer pages. */
-  noticeUserId?: number | null
   showUpstreamEndpoint?: boolean
   /** 嵌入统一卡片内使用：去掉自身卡片外观 */
   flat?: boolean
@@ -666,7 +659,6 @@ interface Props {
 
 const observerMode = inject(observerUsageContext, false)
 
-const timingRecord = ref<AdminUsageLog | null>(null)
 const contentRecord = ref<AdminUsageLog | null>(null)
 
 const props = withDefaults(defineProps<Props>(), {
@@ -675,7 +667,6 @@ const props = withDefaults(defineProps<Props>(), {
   defaultSortKey: '',
   defaultSortOrder: 'asc',
   showAccountBilling: true,
-  enableTimingDetails: false,
   enableContentDetails: false,
   showUpstreamEndpoint: true,
   flat: false,

@@ -63,7 +63,8 @@ const geminiModels = [
   'gemini-3.6-flash',
   'gemini-3.7-flash',
   'gemini-3.8-flash',
-  'gemini-4-argon'
+  'gemini-4-argon',
+  'gemini-4-carbon'
 ]
 
 // Antigravity 官方支持的模型（精确匹配）
@@ -119,7 +120,8 @@ const antigravityModels = [
   'gemini-3.8-flash-medium',
   'gemini-3.8-flash-high',
   'gemini-3.8-flash-tiered',
-  // Gemini 4 Argon 系列
+  // Gemini 4 系列
+  'gemini-4-carbon',
   'gemini-4-argon-low',
   'gemini-4-argon-medium',
   'gemini-4-argon-high',
@@ -141,15 +143,49 @@ const zhipuModels = [
   'cogview-3', 'cogvideo'
 ]
 
-// 阿里 通义千问
+// 百炼北京区 OpenAI 兼容目录（2026-11-24）：GET /compatible-mode/v1/models。
+// 账号实际可用模型以「同步上游支持的模型」的结果为准。
 const qwenModels = [
-  'qwen-turbo', 'qwen-plus', 'qwen-max', 'qwen-max-longcontext', 'qwen-long',
-  'qwen2-72b-instruct', 'qwen2-57b-a14b-instruct', 'qwen2-7b-instruct',
-  'qwen2.5-72b-instruct', 'qwen2.5-32b-instruct', 'qwen2.5-14b-instruct',
-  'qwen2.5-7b-instruct', 'qwen2.5-3b-instruct', 'qwen2.5-1.5b-instruct',
-  'qwen2.5-coder-32b-instruct', 'qwen2.5-coder-14b-instruct', 'qwen2.5-coder-7b-instruct',
-  'qwen3-235b-a22b',
-  'qwq-32b', 'qwq-32b-preview'
+  // Qwen4、Qwen3.8、Qwen3.7
+  'qwen4-max', 'qwen3.8-max', 'qwen3.8-max-0902', 'qwen3.8-flash', 'qwen3.8-2.4t-a95b',
+  'qwen3.8-27b', 'qwen3.8-livetranslate-flash-realtime', 'qwen3.8-omni-flash',
+  'qwen3.8-omni-flash-realtime', 'qwen3.7-max', 'qwen3.7-max-2026-05-17', 'qwen3.7-max-2026-05-20',
+  'qwen3.7-max-2026-06-08', 'qwen3.7-max-preview', 'qwen3.7-plus', 'qwen3.7-plus-2026-05-26',
+  'qwen3.7-flash', 'qwen3.7-flash-2026-07-15', 'qwen3.7-text-embedding',
+  'qwen3.7-text-embedding-flash', 'qwen3.7-text-rerank',
+  // Qwen3.6、Qwen3.5
+  'qwen3.6-plus', 'qwen3.6-plus-2026-04-02', 'qwen3.6-flash', 'qwen3.6-flash-2026-04-16',
+  'qwen3.6-27b', 'qwen3.6-35b-a3b', 'qwen3.5-plus', 'qwen3.5-plus-2026-02-15',
+  'qwen3.5-plus-2026-04-20', 'qwen3.5-flash', 'qwen3.5-flash-2026-02-23', 'qwen3.5-122b-a10b',
+  'qwen3.5-27b', 'qwen3.5-35b-a3b', 'qwen3.5-397b-a17b', 'qwen3.5-livetranslate-flash-realtime',
+  'qwen3.5-livetranslate-flash-realtime-2026-05-19', 'qwen3.5-ocr', 'qwen3.5-omni-flash',
+  'qwen3.5-omni-flash-2026-03-15', 'qwen3.5-omni-flash-realtime',
+  'qwen3.5-omni-flash-realtime-2026-03-15', 'qwen3.5-omni-plus', 'qwen3.5-omni-plus-2026-03-15',
+  'qwen3.5-omni-plus-realtime', 'qwen3.5-omni-plus-realtime-2026-03-15',
+  // Qwen3 专项模型
+  'qwen3-asr-flash-realtime', 'qwen3-coder-flash', 'qwen3-coder-flash-2025-07-28',
+  'qwen3-livetranslate-flash', 'qwen3-livetranslate-flash-2025-12-01', 'qwen3-omni-flash',
+  'qwen3-omni-flash-realtime-2025-09-15', 'qwen3-s2s-flash-realtime-2025-09-22', 'qwen3-tts-flash',
+  'qwen3-tts-flash-realtime', 'qwen3-vl-plus',
+  // 通用及专项模型
+  'qwen-audio-3.0-asr-flash', 'qwen-audio-3.0-realtime-flash', 'qwen-audio-3.0-realtime-plus',
+  'qwen-audio-3.1-realtime-flash', 'qwen-audio-3.1-realtime-plus', 'qwen-deep-research',
+  'qwen-deep-research-2025-12-15', 'qwen-deep-search-planning', 'qwen-doc-turbo', 'qwen-flash',
+  'qwen-flash-2025-07-28', 'qwen-flash-character', 'qwen-flash-character-2026-02-26',
+  'qwen-image-2.0', 'qwen-image-2.0-2026-03-03', 'qwen-image-2.0-pro',
+  'qwen-image-2.0-pro-2026-03-03', 'qwen-image-2.0-pro-2026-04-22', 'qwen-image-2.0-pro-2026-06-22',
+  'qwen-image-2.1-pro', 'qwen-image-3.0', 'qwen-image-3.0-pro', 'qwen-long', 'qwen-max',
+  'qwen-max-0107', 'qwen-max-1201', 'qwen-max-longcontext', 'qwen-mt-flash', 'qwen-mt-lite',
+  'qwen-mt-plus', 'qwen-mt-uni', 'qwen-plus', 'qwen-plus-2025-01-25', 'qwen-plus-2025-04-28',
+  'qwen-plus-2025-07-14', 'qwen-plus-2025-11-05', 'qwen-plus-2025-12-01', 'qwen-plus-character',
+  'qwen-plus-latest', 'qwen-turbo-0919', 'qwen-turbo-2024-11-01', 'qwen-vl-ocr',
+  'qwen-vl-ocr-2025-11-20',
+  // 早期版本
+  'qwen-1.8b-chat', 'qwen-1.8b-longcontext-chat', 'qwen-14b-chat', 'qwen-72b-chat', 'qwen-7b-chat',
+  'qwen1.5-0.5b-chat', 'qwen1.5-1.8b-chat', 'qwen1.5-110b-chat', 'qwen1.5-14b-chat',
+  'qwen1.5-32b-chat', 'qwen1.5-72b-chat', 'qwen1.5-7b-chat', 'qwen2-0.5b-instruct',
+  'qwen2-1.5b-instruct', 'qwen2-57b-a14b-instruct', 'qwen2-7b-instruct', 'qwen2.5-0.5b-instruct',
+  'qwen2.5-1.5b-instruct', 'qwen2.5-math-1.5b-instruct'
 ]
 
 // DeepSeek
@@ -355,6 +391,8 @@ const openaiPresetMappings = [
   { label: 'GPT-6', from: 'gpt-6', to: 'gpt-6', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
   { label: 'GPT-5.6', from: 'gpt-5.6', to: 'gpt-5.6', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
   { label: 'GPT-6.1 Terra', from: 'gpt-6.1-terra', to: 'gpt-6.1-terra', color: 'bg-lime-100 text-lime-700 hover:bg-lime-200 dark:bg-lime-900/30 dark:text-lime-400' },
+  { label: 'GPT-6.2 Sol', from: 'gpt-6.2-sol', to: 'gpt-6.2-sol', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
+  { label: 'GPT-6.2 Astra', from: 'gpt-6.2-astra', to: 'gpt-6.2-astra', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
   { label: 'GPT-6.1 Sol', from: 'gpt-6.1-sol', to: 'gpt-6.1-sol', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
   { label: 'GPT-6 Sol', from: 'gpt-6-sol', to: 'gpt-6-sol', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
   { label: 'GPT-5.6 Sol', from: 'gpt-5.6-sol', to: 'gpt-5.6-sol', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
@@ -394,6 +432,7 @@ const grokPresetMappings = [
 // Antigravity 预设映射（支持通配符）
 const antigravityPresetMappings = [
   // Claude 5.5 / Gemini 4 Argon / 3.8 Flash 推荐映射
+  { label: '4 Carbon', from: 'gemini-4-carbon', to: 'gemini-4-carbon', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
   { label: '4 Argon→High', from: 'gemini-4-argon', to: 'gemini-4-argon-high', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
   { label: '4 Argon High', from: 'gemini-4-argon-high', to: 'gemini-4-argon-high', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
   { label: '4 Argon Medium', from: 'gemini-4-argon-medium', to: 'gemini-4-argon-medium', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400' },
@@ -507,6 +546,9 @@ export const commonErrorCodes = [
 // 按平台获取模型
 export function getModelsByPlatform(platform: string): string[] {
   switch (platform) {
+    // A gateway has no provider-specific defaults. Leave its whitelist
+    // unrestricted until the administrator fetches or selects models.
+    case 'gateway': return []
     case 'openai': return openaiModels
     case 'anthropic':
     case 'claude': return claudeModels

@@ -187,6 +187,28 @@ type OpsRecoveryFailure struct {
 	Protocol       string
 	Phase          string
 	RequestWritten *bool // nil means no proof of whether the generation was sent
+	Controls       *OpsRecoveryControls
+}
+
+// OpsRecoveryControls contains value-free comparison outcomes for the final
+// encrypted-history wire check. It must never contain field values or hashes.
+type OpsRecoveryControls struct {
+	Observation               string `json:"observation"`
+	Snapshot                  string `json:"snapshot"`
+	Tools                     string `json:"tools"`
+	ToolChoice                string `json:"tool_choice"`
+	ParallelToolCalls         string `json:"parallel_tool_calls"`
+	Instructions              string `json:"instructions"`
+	DigestChanged             bool   `json:"digest_changed"`
+	PreviousResponseIDPresent bool   `json:"previous_response_id_present"`
+	ConversationPresent       bool   `json:"conversation_present"`
+}
+
+// OpsUpstreamWSFailure is set at the native upstream socket boundary, never
+// inferred from an error code. HTTP 101 is not an upstream business status.
+type OpsUpstreamWSFailure struct {
+	Phase     string
+	CloseCode int
 }
 
 // OpsStreamError 描述承载在 2xx 响应上的带内错误：网关在响应状态已固化为 200 之后
@@ -195,8 +217,9 @@ type OpsRecoveryFailure struct {
 // 由于 HTTP 状态码停留在 2xx，ops_error_logger 中间件在 status<400 分支消费该标记并
 // 补记错误日志；标记方是 handler.handleStreamingAwareError 或各 service 的带内检测。
 type OpsStreamError struct {
-	RecoveryFailure  *OpsRecoveryFailure
-	TransportFailure *OpsTransportFailure
+	UpstreamWSFailure *OpsUpstreamWSFailure
+	RecoveryFailure   *OpsRecoveryFailure
+	TransportFailure  *OpsTransportFailure
 	// BridgeFailure is set only by the local BPS conversion boundary. It keeps
 	// real upstream HTTP evidence while assigning failure ownership to gateway.
 	BridgeFailure *basispoints.BridgeFailure
@@ -538,6 +561,12 @@ type OpsUpstreamErrorEvent struct {
 	Message string `json:"message,omitempty"`
 	Detail  string `json:"detail,omitempty"`
 
+	// ReportedHeaders are the request headers this attempt sent upstream that
+	// were produced by header-override variables ({{user_id}} etc.), keyed by
+	// lowercase header name. Only variable-driven headers are captured: static
+	// override values may hold relay secrets and must never be logged here.
+	ReportedHeaders map[string]string `json:"reported_headers,omitempty"`
+
 	// SkipMonitoring is request-local rule state. It is intentionally excluded
 	// from persisted attempt JSON. The logger consults it only when this event is
 	// the final client-visible failure; recovered attempts remain provider-health
@@ -596,6 +625,9 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 			ev.Detail = ev.Message
 			ev.UpstreamResponseBody = ev.Message
 		}
+	}
+	if ev.ReportedHeaders == nil && c.Request != nil {
+		ev.ReportedHeaders = headerOverrideReportedHeaders(c.Request.Context(), ev.AccountID)
 	}
 
 	var existing []*OpsUpstreamErrorEvent

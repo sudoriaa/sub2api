@@ -106,6 +106,7 @@ func TestUsageBillingDeliveryLogFailureRollsBackMoneyAndRecovers(t *testing.T) {
 	result, err = repo.ApplyStagedUsageBilling(ctx, key)
 	require.NoError(t, err)
 	require.False(t, result.Result.Applied)
+	require.True(t, result.Settled)
 	require.False(t, result.NeedsCache)
 }
 
@@ -121,10 +122,28 @@ func TestUsageBillingDeliveryArchiveClaimNeverBackChargesHistory(t *testing.T) {
 	r, err := repo.ApplyStagedUsageBilling(ctx, service.UsageBillingEventKey{RequestID: cmd.RequestID, APIKeyID: cmd.APIKeyID})
 	require.NoError(t, err)
 	require.False(t, r.Result.Applied)
+	require.False(t, r.Settled, "legacy dedup is not proof that this staged usage settled")
 	var balance string
 	var logs int
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT balance::text FROM users WHERE id=$1", cmd.UserID).Scan(&balance))
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT count(*) FROM usage_logs WHERE request_id=$1 AND api_key_id=$2", cmd.RequestID, cmd.APIKeyID).Scan(&logs))
 	require.Equal(t, "100.00000000", balance)
 	require.Zero(t, logs, "no fabricated historical canonical usage")
+}
+
+func TestApplyUsageSettlesOnceWithoutStaging(t *testing.T) {
+	ctx := context.Background()
+	repo, cmd, usage, _ := durableBillingFixture(t)
+	first, err := repo.ApplyUsage(ctx, &cmd, &usage)
+	require.NoError(t, err)
+	require.True(t, first.Settled && first.Result.Applied)
+	usage.ActualCost = 77
+	replay, err := repo.ApplyUsage(ctx, &cmd, &usage)
+	require.NoError(t, err)
+	require.True(t, replay.Settled)
+	require.False(t, replay.Result.Applied)
+	require.Equal(t, first.Event.Usage.ActualCost, replay.Event.Usage.ActualCost)
+	var events int
+	require.NoError(t, repo.db.QueryRowContext(ctx, "SELECT count(*) FROM usage_billing_events WHERE request_id=$1", cmd.RequestID).Scan(&events))
+	require.Zero(t, events)
 }

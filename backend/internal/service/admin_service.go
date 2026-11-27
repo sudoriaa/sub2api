@@ -318,6 +318,7 @@ type CreateGroupInput struct {
 	AllowMessagesDispatch       bool
 	AllowLive                   bool
 	ForceOpenAIFast             bool
+	ForceOpenAIUltrafast        bool
 	FreeOpenAIFast              bool
 	FreeOpenAIUltrafast         bool
 	DefaultMappedModel          string
@@ -405,6 +406,7 @@ type UpdateGroupInput struct {
 	AllowMessagesDispatch       *bool
 	AllowLive                   *bool
 	ForceOpenAIFast             *bool
+	ForceOpenAIUltrafast        *bool
 	FreeOpenAIFast              *bool
 	FreeOpenAIUltrafast         *bool
 	DefaultMappedModel          *string
@@ -430,12 +432,20 @@ type UpdateGroupInput struct {
 	CopyAccountsFromGroupIDs []int64
 }
 
+type OAuthImportSource string
+
+const (
+	OAuthImportJSON  OAuthImportSource = "json"
+	OAuthImportTwoFA OAuthImportSource = "two_fa"
+)
+
 type CreateAccountInput struct {
 	InitialAPIKeyDisposition *OAuthAPIKeyDispositionConfig `json:"-"`
 	ProxyMode                string                        // 受限写入在验权后选择代理。
-	InitialOpenAITwoFA       bool                          `json:"-"`
-	InitialAdmissionPlan     *ScheduledTestPlan            `json:"-"`
-	InitialQualityPlan       *ScheduledTestPlan            `json:"-"`
+	OAuthImportSource        OAuthImportSource             `json:"-"`
+	initialAutoSchedule      *bool
+	InitialAdmissionPlan     *ScheduledTestPlan `json:"-"`
+	InitialQualityPlan       *ScheduledTestPlan `json:"-"`
 	Name                     string
 	Notes                    *string
 	Platform                 string
@@ -452,6 +462,7 @@ type CreateAccountInput struct {
 	ExpiresAt                *int64
 	AutoPauseOnExpired       *bool
 	ProbeEnabled             *bool
+	GroupSyncEnabled         *bool
 	// SkipDefaultGroupBind prevents auto-binding to platform default group when GroupIDs is empty.
 	SkipDefaultGroupBind bool
 	// SkipMixedChannelCheck skips the mixed channel risk check when binding groups.
@@ -469,7 +480,9 @@ type ShadowOptions struct {
 }
 
 type UpdateAccountInput struct {
+	UpstreamGroupGuard  *UpstreamGroupSyncGuard
 	ProxyMode           string // 受限写入在验权后选择代理。
+	Platform            string // Empty preserves the existing platform.
 	Name                string
 	Notes               *string
 	Type                string // Account type: oauth, setup-token, apikey
@@ -489,6 +502,7 @@ type UpdateAccountInput struct {
 	ExpiresAt             *int64
 	AutoPauseOnExpired    *bool
 	ProbeEnabled          *bool
+	GroupSyncEnabled      *bool
 	RateSyncEnabled       *bool
 	SkipMixedChannelCheck bool // 跳过混合渠道检查（用户已确认风险）
 }
@@ -763,6 +777,8 @@ type adminServiceImpl struct {
 	affiliateService     adminRechargeAffiliateAccruer
 	compositeRouteRepo   CompositeModelRouteRepository
 	compositeResolver    *CompositeRouteResolver
+
+	userPlatformQuotaRepo UserPlatformQuotaRepository
 	// 分组平台变更后用来失效渠道缓存；可为 nil（缓存会在 TTL 到期后自然重建）
 	channelCacheInvalidator ChannelCacheInvalidator
 }
@@ -806,7 +822,12 @@ func NewAdminService(
 	compositeRouteRepo CompositeModelRouteRepository,
 	compositeResolver *CompositeRouteResolver,
 	channelCacheInvalidator ChannelCacheInvalidator,
+	quotaRepos ...UserPlatformQuotaRepository,
 ) AdminService {
+	var userPlatformQuotaRepo UserPlatformQuotaRepository
+	if len(quotaRepos) > 0 {
+		userPlatformQuotaRepo = quotaRepos[0]
+	}
 	return &adminServiceImpl{
 		cfg:                  cfg,
 		userRepo:             userRepo,
@@ -836,5 +857,6 @@ func NewAdminService(
 		compositeResolver:    compositeResolver,
 
 		channelCacheInvalidator: channelCacheInvalidator,
+		userPlatformQuotaRepo:   userPlatformQuotaRepo,
 	}
 }
